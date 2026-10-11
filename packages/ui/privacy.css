@@ -1,6 +1,14 @@
 .tidy-cookie {
+  --tidy-cookie-ink: var(--color-ink, light-dark(#424242, #d0d0d0));
+  --tidy-cookie-panel: var(--color-panel, light-dark(#fafafa, #202020));
+  --tidy-cookie-surface: var(--color-surface, light-dark(#fff, #262626));
+  --tidy-cookie-hover: var(--color-hover-surface, light-dark(#f0f0f0, #2b2b2b));
+  /* Stronger than the decorative app border so controls remain identifiable. */
+  --tidy-cookie-border: light-dark(#777, #8a8a8a);
+  --tidy-cookie-focus: light-dark(#2455b8, #94b8ff);
+  --tidy-cookie-link: light-dark(#244fa2, #a9c7ff);
   font-family: inherit;
-  color: #202020;
+  color: var(--tidy-cookie-ink);
 }
 .tidy-cookie .tidy-cookie-trigger {
   position: relative;
@@ -19,11 +27,11 @@
   width: auto;
   min-height: 44px;
   height: auto;
-  border: 1px solid #777;
+  border: 1px solid var(--tidy-cookie-border);
   border-radius: 8px;
   padding: 10px 16px;
-  background: #fff;
-  color: #202020;
+  background: var(--tidy-cookie-surface);
+  color: var(--tidy-cookie-ink);
   font: inherit;
   font-size: 14px;
   font-weight: 600;
@@ -31,10 +39,10 @@
   line-height: 1.4;
 }
 .tidy-cookie button:hover {
-  background: #f0f0f0;
+  background: var(--tidy-cookie-hover);
 }
 .tidy-cookie :is(button, a):focus-visible {
-  outline: 3px solid #2455b8;
+  outline: 3px solid var(--tidy-cookie-focus);
   outline-offset: 3px;
 }
 .tidy-cookie .tidy-cookie-dialog {
@@ -46,10 +54,10 @@
   max-width: 540px;
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
-  border: 1px solid #777;
+  border: 1px solid var(--tidy-cookie-border);
   border-radius: 12px;
-  background: #fff;
-  color: #202020;
+  background: var(--tidy-cookie-panel);
+  color: var(--tidy-cookie-ink);
   padding: 24px;
   box-shadow: 0 8px 40px #0002;
 }
@@ -70,7 +78,7 @@
 .tidy-cookie-dialog a {
   display: inline-block;
   min-height: 24px;
-  color: #244fa2;
+  color: var(--tidy-cookie-link);
   text-decoration: underline;
 }
 .tidy-cookie-actions {
