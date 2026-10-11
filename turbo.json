@@ -11,7 +11,8 @@
     "WXT_BELLA_URL",
     "GITHUB_*",
     "LINEAR_*",
-    "BELLA_REALTIME_URL"
+    "BELLA_REALTIME_URL",
+    "PRIVACY_*"
   ],
   "tasks": {
     "build": {

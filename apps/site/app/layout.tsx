@@ -1,3 +1,5 @@
+import { CookieConsent } from "@tidy/ui/cookie-consent";
+import "@tidy/ui/privacy.css";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { siteUrl } from "../lib/site-url";
@@ -29,7 +31,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${instrumentSans.className} ${instrumentSerif.variable}`}>
-      <body>{children}</body>
+      <body>
+        {children}
+        <CookieConsent />
+      </body>
     </html>
   );
 }

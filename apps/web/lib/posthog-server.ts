@@ -1,4 +1,5 @@
 import { posthogCollectionEnabled } from "./posthog-policy";
+import { readConsent } from "@tidy/ui/consent";
 import { PostHog } from "posthog-node";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { safeErrorCode, traceDetails } from "./trace-context";
@@ -29,6 +30,7 @@ type ReportingRuntime = {
 
 // Extract only analytics identity from this project's cookie, never auth data.
 export function analyticsIdentity(headers: HeaderReader, key: string) {
+  if (!readConsent(headers.get("cookie") ?? "")?.analytics) return undefined;
   const prefix = `ph_${key}_posthog=`;
   const cookie = headers
     .get("cookie")
@@ -120,7 +122,8 @@ export function createErrorReporter(headers: HeaderReader, runtime?: ReportingRu
   const ray = headers.get("cf-ray");
 
   return (value: unknown, details: ErrorDetails): Promise<void> => {
-    if (!key || !host) return Promise.resolve();
+    if (!key || !host || !readConsent(headers.get("cookie") ?? "")?.analytics)
+      return Promise.resolve();
     const task = (async () => {
       // Never share pending SDK I/O between Worker invocations.
       const client = new PostHog(key, {

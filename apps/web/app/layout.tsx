@@ -1,3 +1,5 @@
+import { CookieConsent } from "@tidy/ui/cookie-consent";
+import "@tidy/ui/privacy.css";
 import type { Metadata } from "next";
 import { Instrument_Sans } from "next/font/google";
 import localFont from "next/font/local";
@@ -34,7 +36,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           }}
         />
       </head>
-      <body className="min-h-full bg-primary-white font-sans text-primary-black">{children}</body>
+      <body className="min-h-full bg-primary-white font-sans text-primary-black">
+        {children}
+        <CookieConsent analytics />
+      </body>
     </html>
   );
 }

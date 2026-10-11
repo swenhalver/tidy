@@ -1,4 +1,5 @@
 import { posthogCollectionEnabled } from "./posthog-policy";
+import { readConsent } from "@tidy/ui/consent";
 import { PostHog } from "posthog-node/edge";
 import type { Span, SpanRecord } from "posthog-node";
 import { normalizedRoute } from "./route-normalization";
@@ -38,6 +39,7 @@ export function createRequestTrace(request: Request, runtime: TracingRuntime = {
   };
   const configured =
     posthogCollectionEnabled() &&
+    readConsent(request.headers.get("cookie") ?? "")?.analytics &&
     runtime.key &&
     runtime.host &&
     runtime.enabled !== "0" &&

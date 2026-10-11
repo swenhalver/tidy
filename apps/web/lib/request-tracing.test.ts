@@ -1,5 +1,13 @@
 import * as posthogPolicy from "./posthog-policy";
 import { beforeEach, afterEach, expect, spyOn, test } from "bun:test";
+function consentingRequest(url: string, init?: RequestInit) {
+  const headers = new Headers(init?.headers);
+  headers.set(
+    "cookie",
+    `tidy_consent=${encodeURIComponent(JSON.stringify({ version: 1, analytics: true, updatedAt: Date.now() }))}`,
+  );
+  return new Request(url, { ...init, headers });
+}
 import { gunzipSync } from "node:zlib";
 import { createRequestTrace } from "./request-tracing";
 import { startOperation, traceDetails, traceOperation } from "./trace-context";
@@ -117,13 +125,13 @@ test("edge SDK spans stay nested across await and concurrent requests without re
   const c = collector();
   try {
     const a = createRequestTrace(
-      new Request("https://app.test/api/files/private-id/changes?token=secret", {
+      consentingRequest("https://app.test/api/files/private-id/changes?token=secret", {
         headers: { "cf-ray": "ray-a", authorization: "private-bearer", cookie: "private-cookie" },
       }),
       c.runtime,
     );
     const b = createRequestTrace(
-      new Request("https://app.test/api/mcp", { headers: { "cf-ray": "ray-b" } }),
+      consentingRequest("https://app.test/api/mcp", { headers: { "cf-ray": "ray-b" } }),
       c.runtime,
     );
     await Promise.all([
@@ -164,7 +172,7 @@ test("stalled spans export a snapshot before work settles and retain the eventua
   const c = collector();
   let release!: () => void;
   try {
-    const trace = createRequestTrace(new Request("https://app.test/files"), c.runtime);
+    const trace = createRequestTrace(consentingRequest("https://app.test/files"), c.runtime);
     const pending = trace.run(() =>
       traceOperation("auth.api", () =>
         traceOperation(
@@ -206,7 +214,7 @@ test("stalled spans export a snapshot before work settles and retain the eventua
 test("work inside a completed connection callback attaches to the active caller", async () => {
   const c = collector();
   try {
-    const trace = createRequestTrace(new Request("https://app.test/files"), c.runtime);
+    const trace = createRequestTrace(consentingRequest("https://app.test/files"), c.runtime);
     await trace.run(() =>
       traceOperation("auth.api", async () => {
         const connection = startOperation("database.connect");
@@ -230,7 +238,7 @@ test("work inside a completed connection callback attaches to the active caller"
 test("request fan-out is bounded and reports the dropped span count", async () => {
   const c = collector();
   try {
-    const trace = createRequestTrace(new Request("https://app.test/files"), c.runtime);
+    const trace = createRequestTrace(consentingRequest("https://app.test/files"), c.runtime);
     trace.run(() => {
       for (let index = 0; index < 300; index++) startOperation("database.query");
     });
@@ -253,7 +261,7 @@ test("failure codes reach spans while the original application error stays uncha
   const c = collector();
   const error = Object.assign(new Error("private SQL and token=secret"), { code: "ECONNRESET" });
   try {
-    const trace = createRequestTrace(new Request("https://app.test/api/mcp"), c.runtime);
+    const trace = createRequestTrace(consentingRequest("https://app.test/api/mcp"), c.runtime);
     await expect(
       trace.run(() =>
         traceOperation("database.query", async () => {
@@ -274,7 +282,7 @@ test("failure codes reach spans while the original application error stays uncha
 test("trace completion marks still pending operations and does not duplicate later endings", async () => {
   const c = collector();
   try {
-    const trace = createRequestTrace(new Request("https://app.test/files"), c.runtime);
+    const trace = createRequestTrace(consentingRequest("https://app.test/files"), c.runtime);
     const operation = trace.run(() => startOperation("auth.api"));
     trace.finish("request_aborted");
     const spans = await c.spans();
@@ -296,7 +304,7 @@ test("HTML body completion is traced without buffering and MCP SSE finishes at r
   const c = collector();
   try {
     const page = await observeRequest(
-      new Request("https://app.test/files"),
+      consentingRequest("https://app.test/files"),
       async () =>
         new Response("page", { headers: { "Content-Type": "text/html", "X-Test": "preserved" } }),
       undefined,
@@ -309,7 +317,7 @@ test("HTML body completion is traced without buffering and MCP SSE finishes at r
     const stream = new ReadableStream({ start() {} });
     const original = new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
     const sse = await observeRequest(
-      new Request("https://app.test/api/mcp"),
+      consentingRequest("https://app.test/api/mcp"),
       async () => original,
       undefined,
       c.runtime,
@@ -325,7 +333,7 @@ test("HTML body completion is traced without buffering and MCP SSE finishes at r
 test("disabled tracing does no network I/O and captures operation names for diagnostics", async () => {
   const c = collector();
   try {
-    const trace = createRequestTrace(new Request("https://app.test/files"), {
+    const trace = createRequestTrace(consentingRequest("https://app.test/files"), {
       ...c.runtime,
       enabled: "0",
     });
@@ -353,7 +361,7 @@ test("a failed HTML stream marks the root and body spans without changing the er
       },
     });
     const response = await observeRequest(
-      new Request("https://app.test/files"),
+      consentingRequest("https://app.test/files"),
       async () => new Response(body, { headers: { "Content-Type": "text/html" } }),
       undefined,
       c.runtime,
@@ -378,7 +386,7 @@ test("broken telemetry exports never change the request result", async () => {
   c.transport.mockRejectedValue(new Error("private exporter failure"));
   try {
     const response = await observeRequest(
-      new Request("https://app.test/api/health"),
+      consentingRequest("https://app.test/api/health"),
       async () => new Response("ok"),
       undefined,
       c.runtime,
@@ -395,7 +403,7 @@ test("the request deadline retains the trace ID and exports the actual 503 outco
   const c = collector();
   let reportedTrace: string | undefined;
   try {
-    const request = new Request("https://app.test/api/mcp");
+    const request = consentingRequest("https://app.test/api/mcp");
     const response = await observeRequest(
       request,
       () =>
@@ -433,7 +441,7 @@ test("database tracing preserves request cancellation and socket destruction", a
   const failure = new DOMException("private cancellation", "TimeoutError");
   let destroyed = false;
   try {
-    const trace = createRequestTrace(new Request("https://app.test/files"), c.runtime);
+    const trace = createRequestTrace(consentingRequest("https://app.test/files"), c.runtime);
     const raw = {
       query: () => new Promise(() => {}),
       release(error: boolean) {
@@ -464,7 +472,7 @@ test.each(["handler", "body"])(
     const c = collector();
     let reportedTrace: string | undefined;
     try {
-      const request = new Request(
+      const request = consentingRequest(
         "https://app.test/api/auth/oauth2/authorize?state=private-state",
         {
           headers: { accept: "text/html" },

@@ -46,6 +46,8 @@ const nextConfig: NextConfig = {
       },
       ...[
         "/api/auth/:path*",
+        "/api/privacy/:path*",
+        "/account/privacy",
         "/login",
         "/sign-up",
         "/verify-email",

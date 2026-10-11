@@ -7,7 +7,12 @@
     "./avatar": "./avatar.tsx",
     "./button": "./button.tsx",
     "./select-menu": "./select-menu.tsx",
-    "./tidy-logo": "./tidy-logo.tsx"
+    "./tidy-logo": "./tidy-logo.tsx",
+    "./cookie-consent": "./cookie-consent.tsx",
+    "./consent": "./consent.ts",
+    "./privacy-notice": "./privacy-notice.tsx",
+    "./privacy.css": "./privacy.css",
+    "./dialog": "./dialog.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

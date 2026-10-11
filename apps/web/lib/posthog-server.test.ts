@@ -1,5 +1,6 @@
 import * as posthogPolicy from "./posthog-policy";
 import { beforeEach, afterEach, expect, spyOn, test } from "bun:test";
+const consent = `tidy_consent=${encodeURIComponent(JSON.stringify({ version: 1, analytics: true, updatedAt: Date.now() }))}`;
 import { gunzipSync } from "node:zlib";
 import {
   analyticsIdentity,
@@ -17,7 +18,7 @@ afterEach(() => policyOverride.mockRestore());
 
 test("analytics correlation reads only this project's cookie and handles malformed values", () => {
   const headers = new Headers({
-    cookie: `auth=secret; ph_other_posthog=${encodeURIComponent('{"distinct_id":"wrong"}')}; ph_test_posthog=${encodeURIComponent('{"distinct_id":"person-id","private":"secret"}')}`,
+    cookie: `${consent}; auth=secret; ph_other_posthog=${encodeURIComponent('{"distinct_id":"wrong"}')}; ph_test_posthog=${encodeURIComponent('{"distinct_id":"person-id","private":"secret"}')}`,
   });
   expect(analyticsIdentity(headers, "test")).toBe("person-id");
   expect(
@@ -53,7 +54,11 @@ test("Worker reports reach the SDK transport under waitUntil without blocking re
   const tasks: Promise<unknown>[] = [];
   try {
     const report = createErrorReporter(
-      new Headers({ "cf-ray": "test-ray", authorization: "secret-auth", cookie: "auth=private" }),
+      new Headers({
+        "cf-ray": "test-ray",
+        authorization: "secret-auth",
+        cookie: `${consent}; auth=private`,
+      }),
       {
         key: "test-key",
         host: "https://posthog.invalid",
@@ -100,13 +105,13 @@ test("telemetry transport failures are contained", async () => {
     warnings.push(String(value));
   });
   try {
-    await createErrorReporter(new Headers(), { key: "test-key", host: "https://posthog.invalid" })(
-      new Error("original"),
-      {
-        source: "next",
-        event: "server_request_failed",
-      },
-    );
+    await createErrorReporter(new Headers({ cookie: consent }), {
+      key: "test-key",
+      host: "https://posthog.invalid",
+    })(new Error("original"), {
+      source: "next",
+      event: "server_request_failed",
+    });
     expect(warnings.join("\n")).toContain("error_reporting_failed");
     expect(warnings.join("\n")).not.toContain("private");
   } finally {
