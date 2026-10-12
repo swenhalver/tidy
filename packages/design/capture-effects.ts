@@ -113,7 +113,13 @@ export function effectBounds(element: Element): DOMRect {
       throw new Error("Visual group too complex.");
     const node = pending.pop()!;
     const css = getComputedStyle(node);
-    if (css.display === "none" || css.visibility === "hidden") continue;
+    if (
+      css.display === "none" ||
+      css.visibility === "hidden" ||
+      css.opacity === "0" ||
+      isFullyClipped(css)
+    )
+      continue;
     const box = node.getBoundingClientRect();
     if (box.width && box.height) {
       // Computed shadows serialize colors as rgb(...); remove them before reading lengths.
@@ -144,8 +150,8 @@ export function effectBounds(element: Element): DOMRect {
 
 // Crops can include controls outside the captured subtree. Redact those too,
 // including open shadow roots, rather than importing pixels of private values.
-export function protectedBounds(): DOMRect[] {
-  const bounds: DOMRect[] = [];
+export function protectedBounds(): { bounds: DOMRect; backgrounds?: string[] }[] {
+  const bounds: ReturnType<typeof protectedBounds> = [];
   let visited = 0;
   const deadline = performance.now() + 25;
   const pending: Element[] = [document.documentElement];
@@ -153,17 +159,83 @@ export function protectedBounds(): DOMRect[] {
     if (++visited > 15000 || performance.now() > deadline)
       throw new Error("Page too complex for safe screenshot fallbacks.");
     const element = pending.pop()!;
+    const css = getComputedStyle(element);
+    if (css.display === "none" || css.opacity === "0") continue;
+    const uninspectable = element.tagName.includes("-") && !element.shadowRoot;
     if (
       isProtectedElement(element) ||
       // A closed shadow tree cannot be inspected for private controls.
-      (element.tagName.includes("-") && !element.shadowRoot)
+      uninspectable
     ) {
       const box = element.getBoundingClientRect();
-      if (box.width && box.height) bounds.push(box);
+      if (box.width && box.height) {
+        let backgrounds: string[] | undefined;
+        if (!uninspectable) {
+          backgrounds = [];
+          for (let current: Element | null = element; current;) {
+            backgrounds.unshift(getComputedStyle(current).backgroundColor);
+            const root = current.getRootNode();
+            current = current.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
+          }
+        }
+        bounds.push({ bounds: box, backgrounds });
+      }
       continue;
     }
     for (const child of element.children) pending.push(child);
     if (element.shadowRoot) for (const child of element.shadowRoot.children) pending.push(child);
   }
   return bounds;
+}
+
+// Screen-reader helpers have layout boxes but no painted pixels. Do not expose
+// their text or spend raster slots attempting to capture an empty clipping area.
+export function isFullyClipped(css: CSSStyleDeclaration): boolean {
+  const clip = css.clip ?? "";
+  const parts =
+    clip.length < 512 && clip.startsWith("rect(") && clip.endsWith(")")
+      ? clip
+          .slice(5, -1)
+          .trim()
+          .split(/[,\s]+/)
+      : [];
+  const rect =
+    parts.length === 4 && parts.every((value) => /^-?(?:\d+(?:\.\d+)?|\.\d+)px$/.test(value))
+      ? parts.map(parseFloat)
+      : [];
+  if (rect?.length === 4 && ["absolute", "fixed"].includes(css.position))
+    return rect[2]! <= rect[0]! || rect[1]! <= rect[3]!;
+  return false;
+}
+
+export function hasPaintedPseudo(css: CSSStyleDeclaration): boolean {
+  if (
+    !css.content ||
+    ["none", "normal"].includes(css.content) ||
+    css.display === "none" ||
+    css.visibility === "hidden" ||
+    css.opacity === "0"
+  )
+    return false;
+  if (!['""', "''"].includes(css.content)) return true;
+  const opaque = (color: string) =>
+    Boolean(
+      color &&
+      color !== "transparent" &&
+      !(
+        color.startsWith("rgba(") &&
+        color.endsWith(")") &&
+        Number(color.slice(5, -1).split(",")[3]) === 0
+      ),
+    );
+  return Boolean(
+    opaque(css.backgroundColor) ||
+    (css.backgroundImage && css.backgroundImage !== "none") ||
+    (css.boxShadow && css.boxShadow !== "none") ||
+    ["Top", "Right", "Bottom", "Left"].some(
+      (side) =>
+        parseFloat(css.getPropertyValue(`border-${side.toLowerCase()}-width`)) > 0 &&
+        opaque(css.getPropertyValue(`border-${side.toLowerCase()}-color`)),
+    ),
+  );
 }

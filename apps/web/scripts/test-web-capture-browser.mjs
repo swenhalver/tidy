@@ -27,6 +27,9 @@ execFileSync(
 const browser = await chromium.launch({ headless: true });
 const live = process.argv.includes("--shale");
 const profile = process.argv.includes("--profile");
+const artifacts = process.argv.includes("--artifacts");
+const search = process.argv.includes("--search");
+const article = process.argv.includes("--article");
 const selector = profile ? "#profile" : undefined;
 const width = live ? 1440 : 1000,
   height = live ? 1000 : 800;
@@ -36,7 +39,110 @@ try {
     deviceScaleFactor: process.argv.includes("--retina") ? 2 : 1,
   });
   if (live) await page.goto("https://shales.dev/", { waitUntil: "networkidle" });
-  else if (profile) {
+  else if (article) {
+    const icon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><path fill="#36c" d="M2 2h12v3H5v9H2z"/></svg>')}`;
+    await page.route("https://capture.test/", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<style>
+      body{margin:0;background:white;color:#202122;font:20px/30px Arial}main{width:1000px;height:12000px;position:relative}
+      #header-icon,#offscreen-icon{position:absolute;left:30px;top:30px;width:24px;height:24px;background:#36c;mask:url("${icon}") center/24px no-repeat}
+      #offscreen-icon{top:900px}
+      #links{position:absolute;left:30px;top:100px;width:380px}
+      a{color:#36c;text-decoration:none;background:url("${icon}") right center/12px no-repeat;padding-right:15px}
+      #hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:polygon(0 0,0 0,0 0)}
+      .clearfix::after{content:"";display:table;clear:both}
+      #references{position:absolute;left:500px;top:100px;width:350px}
+      #background{position:absolute;left:30px;top:400px;width:200px;height:80px;background:url("${icon}") 25% 75%/20px 20px no-repeat}
+      #repeat{position:absolute;left:300px;top:400px;width:180px;height:80px;background:url("${icon}") 0% 0%/20px repeat-x}
+    </style><main class="clearfix"><div id="header-icon"></div><div id="offscreen-icon"><span style="position:fixed;left:0;top:0;width:1px;height:1px;clip:rect(0,0,0,0)">HIDDEN ACCESSIBILITY CONTENT IN RASTER</span></div>
+      <section id="links"><a>A long external reference that wraps onto multiple lines and ends with a small icon</a><br><a>Archived</a></section>
+      <section id="references" class="clearfix">Visible infobox text<span id="hidden">HIDDEN ACCESSIBILITY CONTENT MUST NOT IMPORT</span></section>
+      <div id="background"></div><div id="repeat"></div>
+      ${Array.from({ length: 4900 }, (_, i) => `<span style="position:absolute;left:30px;top:${1000 + i * 2}px">Row ${i}</span>`).join("")}
+      </main>`,
+      }),
+    );
+    await page.goto("https://capture.test/");
+  } else if (search) {
+    const image = (color) =>
+      `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="${color}"/><circle cx="40" cy="40" r="20" fill="#eee"/></svg>`)}`;
+    await page.route("https://images.test/partial.svg", (route) =>
+      route.fulfill({
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="#f28434"/></svg>',
+      }),
+    );
+    await page.route("https://capture.test/", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<style>
+      *{box-sizing:border-box}body{margin:0;background:color(srgb .13 .14 .15);color:#ddd;font:20px Arial}
+      main{position:relative;width:1000px;height:1800px}
+      img{position:absolute;width:80px;height:80px}
+      #hero{position:absolute;left:30px;top:150px;width:480px;height:200px;overflow:hidden}
+      #hero img{width:96px;height:200px;object-fit:cover}
+      #divider{position:absolute;left:30px;top:390px;width:480px;height:40px;color:white;border:0;border-bottom:2px solid color(srgb .3 .32 .34 / .6)}
+      #edges{position:absolute;left:30px;top:450px;width:300px;height:70px;border:6px solid transparent;border-left-color:oklch(.6 .1 140);border-right-color:color(display-p3 .7 .2 .3);border-bottom-color:color(srgb .3 .32 .34)}
+      .symbol{position:absolute;left:600px;width:40px;height:40px;color:#498df4}
+      #pseudo{position:absolute;left:690px;top:250px;width:40px;height:40px;border:1px solid color(srgb .3 .32 .34);border-radius:50%}
+      #pseudo::before{content:"";position:absolute;left:9px;top:9px;width:20px;height:20px;border-radius:50%;background:oklch(.65 .15 140)}
+      #pseudo::after{content:"+";position:absolute;left:13px;top:8px;font:20px Arial;color:white}
+      #carousel{position:absolute;left:400px;top:480px;width:80px;height:80px;overflow:hidden}
+      #partial{left:950px;top:450px;width:100px;height:100px}
+      #tabs{position:absolute;left:30px;top:90px;display:flex;gap:20px;background:color(srgb 0 0 0 / 0)}
+      #tabs span{border-bottom:3px solid transparent;padding-bottom:8px}
+      #tabs .active{border-bottom-color:#ddd}
+      #search-pill{position:absolute;left:300px;top:20px;width:400px;height:40px;border:1px solid #4d5156;border-radius:20px;background:#363840}
+      .filtered{position:absolute;left:850px;top:1200px;width:12px;height:12px;filter:grayscale(.3);background:#c17544}
+      #contents{display:contents;overflow:hidden}
+      #contents::after{content:""}
+      .repeated-icon{position:absolute;left:850px;top:650px;width:12px;height:12px;background:#498df4;filter:grayscale(.3)}
+      </style><main>
+      ${Array.from({ length: 105 }, (_, i) => `<div class="filtered" style="top:${1200 + i * 3}px;background:rgb(${i},100,140)"></div>`).join("")}
+      ${Array.from({ length: 105 }, (_, i) => `<img alt="Offscreen ${i}" style="left:${(i % 10) * 90}px;top:${1200 + Math.floor(i / 10) * 40}px" src="${image(`#${(0x100000 + i * 1001).toString(16)}`)}">`).join("")}
+      ${Array.from({ length: 120 }, (_, i) => `<img alt="Repeated ${i}" style="width:12px;height:12px;left:${30 + (i % 60) * 14}px;top:${600 + Math.floor(i / 60) * 20}px" src="${image("#396594")}">`).join("")}
+      <svg width="0" height="0" style="position:absolute"><defs><symbol id="social" viewBox="0 0 24 24"><path fill="currentColor" d="M2 2h20v20H2z"/></symbol></defs></svg>
+      <div id="contents"><section id="hero">${["#ba7750", "#659cba", "#7d60ad", "#5d9655", "#c08c43"].map((color, i) => `<img alt="Hero ${i}" style="left:${i * 96}px" src="${image(color)}">`).join("")}</section></div>
+      <nav id="tabs"><span class="active">All</span><span>Images</span><span>News</span></nav><div id="search-pill"></div>
+      ${Array.from({ length: 10 }, (_, i) => `<div class="repeated-icon" style="left:${850 + i * 13}px"></div>`).join("")}
+      <div id="divider"></div><div id="edges"></div>
+      <svg class="symbol" style="top:250px"><use href="#social"/></svg>
+      <svg class="symbol" style="top:1100px"><use href="#social"/></svg>
+      <div id="pseudo"></div><div id="carousel">${Array.from({ length: 105 }, (_, i) => `<img alt="Clipped ${i}" style="left:${100 + i * 90}px" src="${image("#b23f50")}">`).join("")}</div>
+      <img id="partial" alt="Partial" src="https://images.test/partial.svg">
+      <input style="position:absolute;top:30px;left:30px" value="private search token">
+      </main>`,
+      }),
+    );
+    await page.goto("https://capture.test/");
+    await page.evaluate(() => Promise.all([...document.images].map((image) => image.decode())));
+  } else if (artifacts) {
+    await page.route("https://capture.test/", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<style>
+        *{box-sizing:border-box}body{margin:0;background:#212327;color:#ddd;font:20px/28px Arial}
+        main{position:relative;width:1000px;height:800px}
+        #public{position:absolute;left:30px;top:30px;width:500px;height:130px;perspective:1000px;background:#212327}
+        repo-header{display:block;width:450px;height:60px;background:#292d33;padding:15px}
+        button{position:absolute;left:750px;top:30px;width:160px;height:48px;border:1px solid transparent;border-radius:24px;background:#30333d;color:#ddd;font:20px Arial}
+        #form{position:absolute;left:30px;top:220px;width:400px;height:150px;perspective:1000px;background:#212327}
+        input,[contenteditable]{position:absolute;left:20px;width:240px;height:40px;border:0;color:white;font:20px Arial}
+        input{top:20px;background:transparent}[contenteditable]{top:80px;background:rgba(255,255,255,.2)}
+        #closed{position:absolute;left:30px;top:430px;width:400px;height:120px;perspective:1000px;background:#212327}
+        private-editor{display:block;width:300px;height:60px;background:#292d33}
+      </style><main><section id="public"><repo-header>Public repository owner</repo-header><p>Public repository details</p></section>
+      <button id="upgrade">Upgrade</button><section id="form"><input value="private input token"><div contenteditable="true">private draft token</div></section>
+      <section id="closed"><private-editor></private-editor><span>Public account details</span></section></main>`,
+      }),
+    );
+    await page.goto("https://capture.test/");
+    await page.evaluate(() => {
+      document.querySelector("private-editor").attachShadow({ mode: "closed" }).innerHTML =
+        '<input value="closed private token" style="color:red">';
+    });
+  } else if (profile) {
     const avatar = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="#63a69f"/><circle cx="100" cy="70" r="40" fill="#efbb92"/><path d="M20 200v-50a80 65 0 01160 0v50" fill="#383f51"/></svg>`;
     const icon =
       '<svg viewBox="0 0 24 24" width="24" height="24" style="color:#479cf0"><path fill="currentColor" d="M12 0l3 4 5-1-1 5 5 4-5 3 1 5-5-1-3 5-3-5-5 1 1-5-5-3 5-4-1-5 5 1z"/></svg>';
@@ -86,6 +192,14 @@ try {
   });
   await page.addScriptTag({ content: await readFile(bundle, "utf8") });
   await page.addScriptTag({ content: browserCaptureScript });
+  const borderSamples = search
+    ? await page.evaluate(() =>
+        [...document.querySelectorAll("#tabs span, #search-pill")].map((element) => {
+          const box = element.getBoundingClientRect();
+          return { x: Math.floor(box.left + box.width / 2), y: Math.floor(box.bottom - 1) };
+        }),
+      )
+    : [];
   const viewport = await page.evaluate(
     (selector) => globalThis.__tidyCapture.prepare({ selector }),
     selector,
@@ -117,7 +231,118 @@ try {
     ],
     { cwd: repo, stdio: "pipe" },
   );
-  if (profile) {
+  if (article) {
+    assert.ok(!JSON.stringify(capture).includes("HIDDEN ACCESSIBILITY CONTENT"));
+    assert.ok(
+      capture.document.nodes.length > 4900,
+      "Exercise raster replacements near the layer limit",
+    );
+    for (const name of ["header-icon:", "offscreen-icon:"])
+      assert.ok(
+        capture.document.nodes.some((node) => node.name.startsWith(name) && node.type === "image"),
+        `${name} preserves its mask`,
+      );
+    assert.ok(
+      capture.document.nodes.find((node) => node.name.startsWith("offscreen-icon:")).box.height <=
+        25,
+      "Clipped descendants do not expand raster bounds toward the viewport",
+    );
+    assert.ok(
+      !capture.document.warnings.some(({ message }) => message.includes("Generated CSS content")),
+      "Empty layout helpers do not trigger rasterization",
+    );
+    assert.ok(capture.assets.length < 10, "Small decorations do not exhaust image slots");
+    assert.ok(
+      capture.document.nodes.some(
+        (node) => node.type === "text" && node.text.includes("A long external"),
+      ),
+      "Links remain editable",
+    );
+  } else if (search) {
+    assert.equal(capture.assets.length, 100, "Unique assets stay within the existing budget");
+    assert.ok(!JSON.stringify(capture).includes("private search token"));
+    assert.ok(
+      !capture.document.warnings.some(({ message }) => message.includes("advanced CSS colors")),
+    );
+    const divider = capture.document.nodes.find((node) => node.name === "divider");
+    assert.ok(divider.style.borderColor.startsWith("#4"), "Bottom divider retains its dark color");
+    const edges = capture.document.nodes.find((node) => node.name === "edges");
+    assert.equal(edges.style.borderColor, "#00000000");
+    assert.ok(
+      edges.style.borderBottomColor && edges.style.borderLeftColor && edges.style.borderRightColor,
+    );
+    assert.ok(
+      capture.document.nodes.filter((node) => node.name.startsWith("Hero ")).length === 5,
+      "Boxless layout helpers keep all five visible photos editable under image pressure",
+    );
+    const icons = capture.document.nodes.filter((node) => node.name.startsWith("repeated-icon:"));
+    assert.equal(icons.length, 10);
+    assert.equal(
+      new Set(icons.map((node) => node.assetId)).size,
+      1,
+      "Repeated raster effects share an asset",
+    );
+    const repeated = capture.document.nodes.filter((node) => node.name.startsWith("Repeated "));
+    assert.equal(repeated.length, 120);
+    assert.equal(
+      new Set(repeated.map((node) => node.assetId)).size,
+      1,
+      "Repeated pixels share one asset",
+    );
+    assert.ok(
+      !capture.document.nodes.some((node) => node.name.startsWith("Clipped ")),
+      "Carousel clips do not consume image slots",
+    );
+    assert.ok(
+      capture.document.nodes.some((node) => node.name.includes("Generated CSS content")),
+      "Generated icon is retained",
+    );
+    assert.ok(
+      capture.document.nodes.some((node) => node.name === "Partial"),
+      "Partially visible cross-origin images use the visible crop",
+    );
+    assert.equal(
+      capture.document.nodes.filter((node) => node.name === "svg").length,
+      2,
+      "Local SVG symbols work inside and outside the viewport",
+    );
+  } else if (artifacts) {
+    const upgrade = capture.document.nodes.find((node) => node.name === "upgrade");
+    assert.equal(upgrade.style.borderColor, "#00000000", "Transparent borders stay invisible");
+    assert.equal(upgrade.style.borderWidth, 1, "Invisible borders retain their layout width");
+    for (const text of [
+      "Public repository owner",
+      "Public repository details",
+      "Public account details",
+    ])
+      assert.ok(
+        capture.document.nodes.some((node) => node.type === "text" && node.text === text),
+        `${text} stays editable`,
+      );
+    assert.ok(!JSON.stringify(capture).includes("private input token"));
+    assert.ok(!JSON.stringify(capture).includes("private draft token"));
+    assert.ok(!JSON.stringify(capture).includes("closed private token"));
+    assert.equal(
+      capture.assets.length,
+      1,
+      "Only the inspectable form group uses screenshot pixels",
+    );
+    const { data, info } = await sharp(Buffer.from(capture.assets[0].base64, "base64"))
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    for (const [y, color] of [
+      [40, [33, 35, 39, 255]],
+      [100, [77, 79, 82, 255]],
+    ]) {
+      const offset = (y * info.width + 40) * 4;
+      assert.deepEqual(
+        [...data.subarray(offset, offset + 4)],
+        color,
+        "Private controls use opaque CSS backgrounds instead of white bars",
+      );
+    }
+  } else if (profile) {
     assert.equal(
       capture.document.nodes[0].style.fill,
       "#000000",
@@ -205,34 +430,21 @@ try {
     async ({ capture, width, height }) => {
       const root = document.createElement("div");
       root.style.cssText = `position:relative;width:${width}px;height:${height}px;background:#fff;overflow:hidden`;
-      const byId = new Map();
-      for (const node of capture.document.nodes) {
-        const el = document.createElement("div"),
-          style = window.nodeStyle(node, "absolute", {});
-        for (const [key, value] of Object.entries(style))
-          if (value !== undefined)
-            el.style[key] =
-              typeof value === "number" &&
-              !["opacity", "zIndex", "fontWeight", "lineHeight", "flexGrow", "flexShrink"].includes(
-                key,
-              )
-                ? `${value}px`
-                : String(value);
-        if (node.type === "text") window.renderText(el, node);
-        if (node.type === "image" || node.type === "vector") {
-          const img = document.createElement("img"),
-            asset = capture.assets.find((asset) => asset.id === node.assetId);
-          img.src = `data:${asset.mimeType};base64,${asset.base64}`;
-          Object.assign(img.style, window.imageStyle(node), { display: "block" }); // Match Tidy's Tailwind preflight.
-          el.append(img);
-          await img.decode();
-        }
-        (byId.get(node.parentId) || root).append(el);
-        byId.set(node.id, el);
-      }
       for (const style of document.querySelectorAll("style, link[rel=stylesheet]")) style.remove();
       document.body.replaceChildren(root);
       document.body.style.cssText = "margin:0;padding:0";
+      window.renderCapture(
+        root,
+        capture.document,
+        Object.fromEntries(
+          capture.assets.map((asset) => [
+            asset.id,
+            `data:${asset.mimeType};base64,${asset.base64}`,
+          ]),
+        ),
+      );
+      await Promise.all([...document.images].map((image) => image.decode().catch(() => {})));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       window.scrollTo(0, 0);
     },
     { capture, width, height },
@@ -243,31 +455,64 @@ try {
       sharp(bytes).resize(width, height).removeAlpha().raw().toBuffer(),
     ),
   );
-  const regions = profile
+  const regions = article
     ? [
-        { name: "profile background and avatar", x: 0, y: 0, width: 250, height: 170 },
-        { name: "profile button", x: 750, y: 20, width: 250, height: 80 },
-        { name: "profile text and SVG", x: 20, y: 175, width: 930, height: 320 },
-        { name: "multiline editable text", x: 20, y: 500, width: 380, height: 160 },
-        { name: "filter and clip path", x: 490, y: 510, width: 100, height: 100 },
-        { name: "rotated shape", x: 620, y: 490, width: 160, height: 150 },
+        { name: "masked header icon", x: 20, y: 20, width: 50, height: 50 },
+        { name: "wrapped external links", x: 20, y: 90, width: 400, height: 180 },
+        { name: "visually hidden text", x: 490, y: 90, width: 400, height: 200 },
+        {
+          name: "sized positioned and repeating backgrounds",
+          x: 20,
+          y: 390,
+          width: 470,
+          height: 100,
+        },
       ]
-    : live
+    : search
       ? [
-          { name: "header logo icon", x: 130, y: 30, width: 28, height: 30 },
-          { name: "GitHub header icon", x: 1207, y: 40, width: 20, height: 20 },
-          { name: "GitHub CTA icon", x: 562, y: 308, width: 22, height: 22 },
-          { name: "left forest", x: 0, y: 300, width: 250, height: 650 },
-          { name: "right forest", x: 1210, y: 300, width: 230, height: 650 },
-          // Compare the physical laptop, excluding its intentionally redacted controls.
-          { name: "laptop top and sides", x: 340, y: 375, width: 790, height: 275 },
-          { name: "laptop base", x: 275, y: 837, width: 918, height: 65 },
+          { name: "visible photo grid", x: 20, y: 140, width: 500, height: 220 },
+          { name: "modern colors and independent borders", x: 20, y: 380, width: 500, height: 150 },
+          { name: "local SVG and generated CSS icons", x: 590, y: 240, width: 150, height: 60 },
+          { name: "partially visible cross-origin image", x: 940, y: 440, width: 60, height: 120 },
         ]
-      : [
-          { name: "left forest", x: 0, y: 150, width: 290, height: 550 },
-          { name: "right forest", x: 710, y: 150, width: 290, height: 550 },
-          { name: "laptop", x: 290, y: 230, width: 420, height: 320 },
-        ];
+      : artifacts
+        ? [
+            { name: "public custom-element content", x: 20, y: 20, width: 520, height: 150 },
+            { name: "transparent upgrade button border", x: 740, y: 20, width: 180, height: 70 },
+          ]
+        : profile
+          ? [
+              { name: "profile background and avatar", x: 0, y: 0, width: 250, height: 170 },
+              { name: "profile button", x: 750, y: 20, width: 250, height: 80 },
+              { name: "profile text and SVG", x: 20, y: 175, width: 930, height: 320 },
+              { name: "multiline editable text", x: 20, y: 500, width: 380, height: 160 },
+              { name: "filter and clip path", x: 490, y: 510, width: 100, height: 100 },
+              { name: "rotated shape", x: 620, y: 490, width: 160, height: 150 },
+            ]
+          : live
+            ? [
+                { name: "header logo icon", x: 130, y: 30, width: 28, height: 30 },
+                { name: "GitHub header icon", x: 1207, y: 40, width: 20, height: 20 },
+                { name: "GitHub CTA icon", x: 562, y: 308, width: 22, height: 22 },
+                { name: "left forest", x: 0, y: 300, width: 250, height: 650 },
+                { name: "right forest", x: 1210, y: 300, width: 230, height: 650 },
+                // Compare the physical laptop, excluding its intentionally redacted controls.
+                { name: "laptop top and sides", x: 340, y: 375, width: 790, height: 275 },
+                { name: "laptop base", x: 275, y: 837, width: 918, height: 65 },
+              ]
+            : [
+                { name: "left forest", x: 0, y: 150, width: 290, height: 550 },
+                { name: "right forest", x: 710, y: 150, width: 290, height: 550 },
+                { name: "laptop", x: 290, y: 230, width: 420, height: 320 },
+              ];
+  for (const { x, y } of borderSamples) {
+    const index = (y * width + x) * 3;
+    assert.deepEqual(
+      pixels[1].subarray(index, index + 3),
+      pixels[0].subarray(index, index + 3),
+      "React rendering retains the exact active, transparent and dark border pixels",
+    );
+  }
   for (const region of regions) {
     let total = 0;
     for (let y = region.y; y < region.y + region.height; y++)

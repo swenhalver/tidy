@@ -1,3 +1,4 @@
+import { drawCaptureBackground } from "./capture-background";
 import { captureGradientStack } from "./capture-gradients";
 import { parseCssShadows } from "./effects";
 import type { DesignNode } from "./document";
@@ -13,6 +14,8 @@ import {
   effectBounds,
   intersectBounds,
   isProtectedElement,
+  isFullyClipped,
+  hasPaintedPseudo,
   protectedBounds,
   rasterEffect,
   sameViewport,
@@ -22,6 +25,8 @@ import {
 const MAX_ASSET_BASE64_BYTES = 13_000_000; // Leave 3 MB for nodes and capture metadata.
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const colorContexts = new WeakMap<Document, CanvasRenderingContext2D | null>();
+const resolvedColors = new Map<string, string>();
 
 export function cssColor(value: string, preserveTransparent = false): string | undefined {
   if (value === "transparent") return preserveTransparent ? "#00000000" : undefined;
@@ -29,7 +34,39 @@ export function cssColor(value: string, preserveTransparent = false): string | u
   const match = value.match(
     /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/,
   );
-  if (!match) return undefined;
+  if (!match) {
+    // Let the source browser convert CSS Color 4 (including wide-gamut colors)
+    // to the sRGB pixels used by the design renderer. Never restyle the page.
+    let color = resolvedColors.get(value);
+    if (!color && typeof document !== "undefined") {
+      try {
+        if (!colorContexts.has(document)) {
+          const canvas = document.createElement("canvas");
+          canvas.width = canvas.height = 1;
+          colorContexts.set(document, canvas.getContext("2d", { willReadFrequently: true }));
+        }
+        const context = colorContexts.get(document);
+        if (!context) return undefined;
+        context.fillStyle = "#010203";
+        context.fillStyle = value;
+        if (context.fillStyle === "#010203") {
+          context.fillStyle = "#040506";
+          context.fillStyle = value;
+          if (context.fillStyle === "#040506") return undefined;
+        }
+        context.clearRect(0, 0, 1, 1);
+        context.fillRect(0, 0, 1, 1);
+        const channels = [...context.getImageData(0, 0, 1, 1).data];
+        if (channels[3] === 255) channels.pop();
+        color = `#${channels.map((part) => part.toString(16).padStart(2, "0")).join("")}`;
+        if (resolvedColors.size >= 512) resolvedColors.clear();
+        resolvedColors.set(value, color);
+      } catch {
+        return undefined;
+      }
+    }
+    return color?.endsWith("00") && color.length === 9 && !preserveTransparent ? undefined : color;
+  }
   const alpha = match[4] ? Number.parseFloat(match[4]) / (match[4].endsWith("%") ? 100 : 1) : 1;
   if (alpha === 0 && !preserveTransparent) return undefined;
   const channels = match.slice(1, 4).map((part) => clamp(Math.round(Number(part)), 0, 255));
@@ -60,7 +97,7 @@ export function captureStyle(
     radiusTopRight: radius(css.borderTopRightRadius),
     radiusBottomRight: radius(css.borderBottomRightRadius),
     radiusBottomLeft: radius(css.borderBottomLeftRadius),
-    borderColor: cssColor(css.borderTopColor),
+    borderColor: cssColor(css.borderTopColor, true),
     borderWidth: clamp(px(css.borderTopWidth), 0, 40),
     borderTopWidth: clamp(px(css.borderTopWidth), 0, 40),
     borderRightWidth: clamp(px(css.borderRightWidth), 0, 40),
@@ -72,7 +109,15 @@ export function captureStyle(
   const visibleBorder = (["Top", "Right", "Bottom", "Left"] as const).find(
     (edge) => px(css[`border${edge}Width`]) > 0,
   );
-  if (visibleBorder) style.borderColor = cssColor(css[`border${visibleBorder}Color`]);
+  if (visibleBorder) style.borderColor = cssColor(css[`border${visibleBorder}Color`], true);
+  const edges = ["Top", "Right", "Bottom", "Left"] as const;
+  for (const edge of edges) {
+    if (px(css[`border${edge}Width`]) <= 0) continue;
+    const color = cssColor(css[`border${edge}Color`], true);
+    if (color !== style.borderColor) style[`border${edge}Color`] = color;
+  }
+  const borderStyle = visibleBorder && css[`border${visibleBorder}Style`];
+  if (borderStyle === "dotted" || borderStyle === "dashed") style.borderStyle = borderStyle;
   if (css.boxShadow && css.boxShadow !== "none") {
     const shadows = parseCssShadows(css.boxShadow, "captured-shadow", cssColor(css.color));
     if (shadows) style.shadows = shadows;
@@ -87,6 +132,10 @@ export function captureStyle(
       borderRightWidth: 0,
       borderBottomWidth: 0,
       borderLeftWidth: 0,
+      borderTopColor: undefined,
+      borderRightColor: undefined,
+      borderBottomColor: undefined,
+      borderLeftColor: undefined,
       shadow: undefined,
       shadows: undefined,
       radius: 0,
@@ -94,7 +143,7 @@ export function captureStyle(
       radiusTopRight: 0,
       radiusBottomRight: 0,
       radiusBottomLeft: 0,
-      color: cssColor(css.color) ?? "#000000",
+      color: cssColor(css.color, true) ?? "#000000",
       fontSize: size,
       fontFamily: css.fontFamily.slice(0, 100),
       fontWeight: clamp(px(css.fontWeight) || 400, 100, 900),
@@ -318,7 +367,7 @@ export async function captureElement(
   };
   const startViewport = currentViewport();
   let viewport: HTMLImageElement | undefined;
-  let privateRegions: DOMRect[] = [];
+  let privateRegions: ReturnType<typeof protectedBounds> = [];
   if (
     screenshot &&
     options?.screenshotValid?.() !== false &&
@@ -338,6 +387,10 @@ export async function captureElement(
       "Screenshot fallbacks were unavailable or the viewport changed; effect layers may be approximated.",
     );
   let assetBytes = 0;
+  const assetIds = new Map<string, string>();
+  const decodedImages = new Map<string, Promise<HTMLImageElement>>();
+  const renderedImages = new Map<string, string>();
+  const assetJobs: { visible: boolean; run: () => Promise<void> }[] = [];
   const rasterLayers: (() => void)[] = [];
   const cropScreenshot = (canvas: HTMLCanvasElement, bounds: DOMRect) => {
     if (
@@ -348,6 +401,19 @@ export async function captureElement(
       return false;
     const context = canvas.getContext("2d");
     if (!context) return false;
+    const overlaps = privateRegions.flatMap((region) => {
+      const overlap = intersectBounds(bounds, region.bounds);
+      return overlap ? [{ ...region, overlap }] : [];
+    });
+    // A custom element may have a closed shadow root. Blanking its whole box
+    // would also erase public light-DOM content (e.g. GitHub's navigation).
+    // Keep the inspectable DOM layers instead of overlaying a destructive crop.
+    if (overlaps.some((region) => !region.backgrounds)) {
+      warn(
+        "Some screenshot effects overlapped uninspectable components; public DOM layers were retained with approximated effects.",
+      );
+      return false;
+    }
     const ratioX = viewport.naturalWidth / startViewport.width,
       ratioY = viewport.naturalHeight / startViewport.height;
     context.drawImage(
@@ -361,19 +427,20 @@ export async function captureElement(
       canvas.width,
       canvas.height,
     );
-    for (const region of privateRegions) {
-      const overlap = intersectBounds(bounds, region);
-      if (!overlap) continue;
-      // Overwrite with opaque pixels, never alpha-clear (which could reveal a lower crop).
-      context.fillStyle = "#ffffff";
+    for (const { overlap, backgrounds } of overlaps) {
       const sx = canvas.width / bounds.width,
         sy = canvas.height / bounds.height;
-      context.fillRect(
-        Math.floor((overlap.left - bounds.left) * sx),
-        Math.floor((overlap.top - bounds.top) * sy),
-        Math.ceil(overlap.width * sx) + 1,
-        Math.ceil(overlap.height * sy) + 1,
-      );
+      // Start opaque so no private pixels survive translucent backgrounds.
+      // Rebuild only CSS background colors, never sample the control's pixels.
+      for (const color of ["#ffffff", ...backgrounds!]) {
+        context.fillStyle = color;
+        context.fillRect(
+          Math.floor((overlap.left - bounds.left) * sx),
+          Math.floor((overlap.top - bounds.top) * sy),
+          Math.ceil(overlap.width * sx) + 1,
+          Math.ceil(overlap.height * sy) + 1,
+        );
+      }
       warn(
         "Form controls, editable content and embedded frames were redacted from screenshot fallbacks.",
       );
@@ -387,17 +454,23 @@ export async function captureElement(
     overlay = false,
     parent?: CaptureParent,
   ) => {
-    const bytes = tiles.reduce((sum, tile) => sum + tile.base64.length, 0);
+    const unique = new Set(
+      tiles.map((tile) => tile.base64).filter((pixels) => !assetIds.has(pixels)),
+    );
+    const bytes = [...unique].reduce((sum, pixels) => sum + pixels.length, 0);
     if (
       assetBytes + bytes > MAX_ASSET_BASE64_BYTES ||
-      result.assets.length + tiles.length > 100 ||
-      result.document.nodes.length + tiles.length + 1 > 4900
+      result.assets.length + unique.size > 100 ||
+      result.document.nodes.length + tiles.length + (tiles.length > 1 ? 1 : 0) > 5000
     )
       throw new Error("Raster capture budget exceeded.");
     assetBytes += bytes;
     const assets = tiles.map((tile) => {
+      const existing = assetIds.get(tile.base64);
+      if (existing) return existing;
       const id = crypto.randomUUID();
       result.assets.push({ id, mimeType: "image/png", base64: tile.base64 });
+      assetIds.set(tile.base64, id);
       return id;
     });
     const render = () => {
@@ -540,8 +613,34 @@ export async function captureElement(
     backgroundUrl?: string,
     parent?: CaptureParent,
   ) => {
-    if (result.assets.length >= 100) {
-      warn("Only the first 100 images were imported.");
+    const sourceUrl =
+      backgroundUrl ??
+      (element instanceof HTMLImageElement ? element.currentSrc || element.src : undefined);
+    const imageKey =
+      sourceUrl &&
+      JSON.stringify([
+        sourceUrl,
+        bounds.width,
+        bounds.height,
+        css.objectFit,
+        css.objectPosition,
+        css.backgroundSize,
+        css.backgroundPosition,
+        css.backgroundRepeat,
+        css.backgroundOrigin,
+        ...(backgroundUrl
+          ? [...element.getClientRects()].map((rect) => [
+              rect.x - bounds.x,
+              rect.y - bounds.y,
+              rect.width,
+              rect.height,
+            ])
+          : []),
+        window.devicePixelRatio,
+      ]);
+    const cachedPixels = imageKey && renderedImages.get(imageKey);
+    if (!cachedPixels && result.assets.length >= 100 && element.localName !== "svg") {
+      warn("Only 100 unique images could be imported; visible images were prioritized.");
       return;
     }
     const canvas = document.createElement("canvas");
@@ -557,7 +656,8 @@ export async function captureElement(
     let fromScreenshot = false;
     let isolated = false;
     try {
-      if (element.tagName.toLowerCase() === "svg" && !backgroundUrl) {
+      if (cachedPixels) base64 = cachedPixels;
+      else if (element.tagName.toLowerCase() === "svg" && !backgroundUrl) {
         base64 = await rasterizeElement(element, bounds);
         isolated = true;
       } else {
@@ -569,11 +669,18 @@ export async function captureElement(
             (element instanceof HTMLImageElement ? element.currentSrc || element.src : undefined);
           if (!url || !/^(https?:|data:image\/|blob:)/i.test(url))
             throw new Error("Unrenderable image");
-          const image = new Image();
-          image.crossOrigin = "anonymous";
-          image.src = url;
-          await decodeCaptureImage(image, Math.min(3000, deadline - performance.now()));
-          source = image;
+          let decoded = decodedImages.get(url);
+          if (!decoded) {
+            decoded = (async () => {
+              const image = new Image();
+              image.crossOrigin = "anonymous";
+              image.src = url;
+              await decodeCaptureImage(image, Math.min(3000, deadline - performance.now()));
+              return image;
+            })();
+            decodedImages.set(url, decoded);
+          }
+          source = await decoded;
         }
         const sourceWidth =
           source instanceof HTMLImageElement
@@ -584,7 +691,12 @@ export async function captureElement(
             ? source.naturalHeight
             : (source as HTMLCanvasElement).height;
         const fit = backgroundUrl ? css.backgroundSize : css.objectFit;
-        if (["cover", "contain"].includes(fit) && sourceWidth && sourceHeight) {
+        if (backgroundUrl) {
+          context.scale(canvas.width / bounds.width, canvas.height / bounds.height);
+          drawCaptureBackground(context, source, sourceWidth, sourceHeight, css, bounds, [
+            ...element.getClientRects(),
+          ]);
+        } else if (["cover", "contain"].includes(fit) && sourceWidth && sourceHeight) {
           const ratio =
             fit === "cover"
               ? Math.max(canvas.width / sourceWidth, canvas.height / sourceHeight)
@@ -605,11 +717,14 @@ export async function captureElement(
       // The browser screenshot can preserve tainted images, SVG, canvas and video in view.
       if (
         viewport &&
-        bounds.left >= 0 &&
-        bounds.top >= 0 &&
-        bounds.right <= window.innerWidth &&
-        bounds.bottom <= window.innerHeight
+        intersectBounds(bounds, new DOMRect(0, 0, startViewport.width, startViewport.height))
       ) {
+        // A partially visible image can still contribute the pixels in view.
+        // Keep its crop bounds aligned with the imported layer.
+        bounds = intersectBounds(
+          bounds,
+          new DOMRect(0, 0, startViewport.width, startViewport.height),
+        )!;
         const ratio = 1;
         const left = Math.floor(bounds.left * ratio) / ratio,
           top = Math.floor(bounds.top * ratio) / ratio;
@@ -638,13 +753,22 @@ export async function captureElement(
         );
     }
     if (!base64) return;
-    if (base64.length > 2_600_000 || assetBytes + base64.length > MAX_ASSET_BASE64_BYTES) {
-      warn("Some images exceeded the capture's image size limit and were omitted.");
-      return;
+    if (imageKey && !fromScreenshot) renderedImages.set(imageKey, base64);
+    let id = assetIds.get(base64);
+    if (!id) {
+      if (result.assets.length >= 100) {
+        warn("Only 100 unique images could be imported; visible images were prioritized.");
+        return;
+      }
+      if (base64.length > 2_600_000 || assetBytes + base64.length > MAX_ASSET_BASE64_BYTES) {
+        warn("Some images exceeded the capture's image size limit and were omitted.");
+        return;
+      }
+      assetBytes += base64.length;
+      id = crypto.randomUUID();
+      assetIds.set(base64, id);
+      result.assets.push({ id, mimeType: "image/png", base64 });
     }
-    assetBytes += base64.length;
-    const id = crypto.randomUUID();
-    result.assets.push({ id, mimeType: "image/png", base64 });
     add(
       {
         type: "image",
@@ -660,9 +784,9 @@ export async function captureElement(
                 ...captureStyle(css, false, bounds),
                 fill: undefined,
                 objectFit: "fill",
-                ...(backgroundUrl && parent
+                ...(backgroundUrl
                   ? {
-                      opacity: 1,
+                      opacity: parent ? 1 : captureStyle(css).opacity,
                       borderWidth: 0,
                       borderTopWidth: 0,
                       borderRightWidth: 0,
@@ -680,9 +804,69 @@ export async function captureElement(
       parent,
     );
   };
+  const queueAsset = (
+    element: Element,
+    bounds: DOMRect,
+    css: CSSStyleDeclaration,
+    backgroundUrl?: string,
+    parent?: CaptureParent,
+  ) => {
+    let painted = intersectBounds(bounds, new DOMRect(originX, originY, width, height));
+    if (!painted || bounds.width < 1 || bounds.height < 1) return;
+    // Carousels often keep hundreds of loaded images outside their clipping
+    // window. Those pixels cannot contribute to this import or its budget.
+    for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      const style = getComputedStyle(ancestor);
+      // display:contents has no CSS box; its overflow cannot clip descendants.
+      if (style.display === "contents") continue;
+      const clipX = ["hidden", "clip", "auto", "scroll"].includes(
+        style.overflowX || style.overflow,
+      );
+      const clipY = ["hidden", "clip", "auto", "scroll"].includes(
+        style.overflowY || style.overflow,
+      );
+      if (clipX || clipY) {
+        const box = ancestor.getBoundingClientRect();
+        painted = intersectBounds(
+          painted,
+          new DOMRect(
+            clipX ? box.left : painted.left,
+            clipY ? box.top : painted.top,
+            clipX ? box.width : painted.width,
+            clipY ? box.height : painted.height,
+          ),
+        );
+        if (!painted) return;
+      }
+      if (ancestor === root) break;
+    }
+    // Reserve paint order now; resolve image data later in viewport order.
+    // The marker is replaced or removed before returning the document.
+    const marker = { id: crypto.randomUUID() } as DesignNode;
+    result.document.nodes.push(marker);
+    assetJobs.push({
+      visible: Boolean(
+        intersectBounds(painted, new DOMRect(0, 0, startViewport.width, startViewport.height)),
+      ),
+      run: async () => {
+        const index = result.document.nodes.indexOf(marker);
+        if (index < 0) return; // An ancestor was already rasterized.
+        result.document.nodes.splice(index, 1);
+        const start = result.document.nodes.length;
+        await asset(element, bounds, css, backgroundUrl, parent);
+        const added = result.document.nodes.splice(start);
+        result.document.nodes.splice(index, 0, ...added);
+      },
+    });
+  };
   let visited = 0;
   let lastYield = performance.now();
-  const visit = async (element: Element, depth: number, parent?: CaptureParent) => {
+  const visit = async (
+    element: Element,
+    depth: number,
+    parent?: CaptureParent,
+    skipEffect = false,
+  ) => {
     if (performance.now() > deadline)
       throw new Error("This capture took too long. Select a smaller portion of the page.");
     if (++visited > 15000 || depth > 80 || result.document.nodes.length >= 5000) {
@@ -704,14 +888,67 @@ export async function captureElement(
     }
     const css = getComputedStyle(element),
       bounds = element.getBoundingClientRect();
-    if (css.display === "none" || css.visibility === "hidden" || css.opacity === "0") return;
+    if (
+      css.display === "none" ||
+      css.visibility === "hidden" ||
+      css.opacity === "0" ||
+      isFullyClipped(css)
+    )
+      return;
     let effect = rasterEffect(css);
     for (const pseudo of ["::before", "::after"]) {
       const pseudoCss = getComputedStyle(element, pseudo);
-      if (pseudoCss.content && !["none", "normal"].includes(pseudoCss.content))
-        effect ??= rasterEffect(pseudoCss);
+      if (hasPaintedPseudo(pseudoCss))
+        effect ??= rasterEffect(pseudoCss) ?? "Generated CSS content";
     }
-    if (effect && (await rasterize(element, effect, parent))) return;
+    let visualBounds: DOMRect | undefined;
+    if (effect && !skipEffect) {
+      try {
+        visualBounds = effectBounds(element);
+      } catch {
+        warn(
+          "Some visual groups exceeded the capture complexity limit; editable layers were retained.",
+        );
+      }
+    }
+    if (effect && !skipEffect && visualBounds) {
+      // Effects share the image budget with ordinary photos. Queue both kinds
+      // in viewport order so offscreen decorations cannot consume every slot.
+      // Keep editable fallbacks until the group has actually been rendered.
+      const marker = { id: crypto.randomUUID() } as DesignNode;
+      result.document.nodes.push(marker);
+      let fallback: DesignNode[] = [];
+      const reason = effect;
+      assetJobs.push({
+        visible: Boolean(
+          intersectBounds(
+            visualBounds,
+            new DOMRect(0, 0, startViewport.width, startViewport.height),
+          ),
+        ),
+        run: async () => {
+          const index = result.document.nodes.indexOf(marker);
+          if (index < 0) return;
+          result.document.nodes.splice(index, 1);
+          const original = result.document.nodes;
+          const removed = new Set(fallback);
+          // Replacing a group frees its fallback layers. Count the replacement,
+          // not both representations, against the document's layer budget.
+          result.document.nodes = original.filter((node) => !removed.has(node));
+          const start = result.document.nodes.length;
+          if (!(await rasterize(element, reason, parent))) {
+            result.document.nodes = original;
+            return;
+          }
+          const added = result.document.nodes.splice(start);
+          result.document.nodes.splice(index, 0, ...added);
+        },
+      });
+      const start = result.document.nodes.length;
+      await visit(element, depth, parent, true);
+      fallback = result.document.nodes.slice(start);
+      return;
+    }
     const style = captureStyle(css, false, bounds);
     // The propagated color is already on every artboard. Painting it again at
     // body bounds would double the opacity of translucent canvas backgrounds.
@@ -752,9 +989,9 @@ export async function captureElement(
       style.fill = undefined;
     }
     if (
-      (css.color && !cssColor(css.color)) ||
+      (css.color && !cssColor(css.color, true)) ||
       (css.backgroundColor &&
-        !cssColor(css.backgroundColor) &&
+        !cssColor(css.backgroundColor, true) &&
         css.backgroundColor !== "rgba(0, 0, 0, 0)" &&
         css.backgroundColor !== "transparent")
     )
@@ -787,7 +1024,7 @@ export async function captureElement(
         bounds,
         parent,
       );
-      if (clips || style.opacity! < 1) {
+      if (nodes.size && (clips || style.opacity! < 1)) {
         for (const node of nodes.values()) node.style.overflow = clips ? "hidden" : "visible";
         contentParent = {
           bounds: new Map(
@@ -810,11 +1047,11 @@ export async function captureElement(
       return;
     }
     const background = css.backgroundImage?.match(/^url\(["']?(.*?)["']?\)$/)?.[1];
-    if (background) await asset(element, bounds, css, background, contentParent);
+    if (background) queueAsset(element, bounds, css, background, contentParent);
     else if (!paints && css.backgroundImage && css.backgroundImage !== "none")
       warn("Unsupported CSS gradients or background positioning were approximated.");
     if (replaced) {
-      await asset(element, bounds, css, undefined, parent);
+      queueAsset(element, bounds, css, undefined, parent);
       return;
     }
     // Positioned content with explicit z-index must retain its paint order:
@@ -921,11 +1158,17 @@ export async function captureElement(
     }
     for (const pseudo of ["::before", "::after"]) {
       const content = getComputedStyle(element, pseudo).content;
-      if (content && content !== "none" && content !== "normal" && content !== '""')
+      if (!effect && content && content !== "none" && content !== "normal" && content !== '""')
         warn("Generated CSS content may be missing; text and shapes remain editable.");
     }
   };
   await visit(root, 0);
+  assetJobs.sort((a, b) => Number(b.visible) - Number(a.visible));
+  for (const job of assetJobs) {
+    if (performance.now() > deadline)
+      throw new Error("This capture took too long. Select a smaller portion of the page.");
+    await job.run();
+  }
   for (const render of rasterLayers) render();
   if (!sameViewport(startViewport, currentViewport()))
     throw new Error("The page moved or resized during capture. Try again with a stable viewport.");
