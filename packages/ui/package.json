@@ -11,6 +11,7 @@
     "./cookie-consent": "./cookie-consent.tsx",
     "./consent": "./consent.ts",
     "./privacy-notice": "./privacy-notice.tsx",
+    "./terms-notice": "./terms-notice.tsx",
     "./privacy.css": "./privacy.css",
     "./dialog": "./dialog.tsx"
   },

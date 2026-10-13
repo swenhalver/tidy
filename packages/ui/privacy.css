@@ -5,8 +5,8 @@
   --tidy-cookie-hover: var(--color-hover-surface, light-dark(#f0f0f0, #2b2b2b));
   /* Stronger than the decorative app border so controls remain identifiable. */
   --tidy-cookie-border: light-dark(#777, #8a8a8a);
-  --tidy-cookie-focus: light-dark(#2455b8, #94b8ff);
-  --tidy-cookie-link: light-dark(#244fa2, #a9c7ff);
+  --tidy-cookie-focus: var(--color-accent, #595959);
+  --tidy-cookie-link: var(--color-ink, #424242);
   font-family: inherit;
   color: var(--tidy-cookie-ink);
 }
@@ -79,7 +79,8 @@
   display: inline-block;
   min-height: 24px;
   color: var(--tidy-cookie-link);
-  text-decoration: underline;
+  font-weight: 600;
+  text-decoration: none;
 }
 .tidy-cookie-actions {
   display: flex;
@@ -88,25 +89,78 @@
   margin-top: 24px;
 }
 .tidy-privacy-notice {
-  max-width: 760px;
+  --tidy-legal-ink: var(--color-ink, var(--text, #1e1e1e));
+  --tidy-legal-secondary: var(--color-secondary-ink, #595959);
+  --tidy-legal-border: var(--color-border, #d8d8d5);
+  --tidy-legal-hover: var(--color-hover-surface, #eaeae7);
+  max-width: 720px;
   margin: 0 auto;
-  padding: 48px 24px 100px;
+  padding: clamp(32px, 6vw, 72px) 24px 80px;
+  color: var(--tidy-legal-secondary);
   font-family: inherit;
+  font-size: 17px;
   line-height: 1.7;
 }
 .tidy-privacy-notice h1 {
-  font-size: 32px;
+  margin: 0 0 28px;
+  color: var(--tidy-legal-ink);
+  font-size: clamp(32px, 4vw, 42px);
   font-weight: 600;
-  margin-bottom: 24px;
+  letter-spacing: -0.04em;
+  line-height: 1.15;
 }
 .tidy-privacy-notice h2 {
-  font-size: 20px;
+  margin: 36px 0 12px;
+  padding-top: 24px;
+  border-top: 1px solid var(--tidy-legal-border);
+  color: var(--tidy-legal-ink);
+  font-size: 18px;
   font-weight: 600;
-  margin-top: 28px;
+  letter-spacing: -0.02em;
+  line-height: 1.4;
 }
 .tidy-privacy-notice p {
-  margin: 12px 0;
+  margin: 14px 0;
+  font-size: inherit;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  line-height: inherit;
+  overflow-wrap: anywhere;
 }
-.tidy-privacy-notice a {
-  text-decoration: underline;
+.tidy-privacy-notice a,
+.tidy-privacy-notice a:visited {
+  border-radius: 3px;
+  color: var(--tidy-legal-ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+.tidy-privacy-notice a:focus-visible {
+  outline: 2px solid var(--tidy-legal-ink);
+  outline-offset: 4px;
+}
+.tidy-privacy-notice .tidy-legal-back {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  margin: 0 0 32px -8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--tidy-legal-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+@media (hover: hover) and (pointer: fine) {
+  .tidy-privacy-notice a:hover {
+    background: var(--tidy-legal-hover);
+  }
+  .tidy-cookie-dialog a:hover {
+    color: var(--color-secondary-ink, #595959);
+  }
+}
+@media (max-width: 480px) {
+  .tidy-privacy-notice {
+    padding-inline: 22px;
+    font-size: 16px;
+  }
 }

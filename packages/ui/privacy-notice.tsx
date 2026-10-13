@@ -9,7 +9,9 @@ export function PrivacyNotice({
 }) {
   return (
     <main className="tidy-privacy-notice">
-      <a href="/">Back to Tidy</a>
+      <a href="/" className="tidy-legal-back">
+        Back to Tidy
+      </a>
       <h1>Privacy and cookies</h1>
       <p>
         {controller || "The operator of this Tidy service"} processes account information to provide
@@ -61,23 +63,27 @@ export function PrivacyNotice({
       </p>
       <h2>Export and deletion</h2>
       <p>
-        Your JSON export contains personal account records and accessible designs you created.
-        Authentication secrets and vault credentials are excluded. Export complete designs with
-        images from the editor. Contact the operator for a complete access request covering
-        historical analytics, feedback, billing or other processor records.
+        Your JSON export contains personal account records, feedback stored in Tidy and accessible
+        designs you created. Authentication secrets and vault credentials are excluded. Export
+        complete designs with images from the editor. Contact the operator for a complete access
+        request covering historical analytics, feedback, billing or other processor records.
       </p>
       <p>
         Deleting your account removes personal records and credentials and revokes access. Shared
         designs remain attributed to “Deleted user”; their content may still contain information
         supplied by workspace members. Transfer ownership or delete organizations where you are the
-        last owner before closing your account. Uploaded personal images, runner data and historical
-        analytics are queued for removal; provider processing may take additional time.
+        last owner before closing your account. Uploaded avatars, feedback attachments, runner data
+        and historical analytics are queued for removal; provider processing may take additional
+        time. The operator must verify completion of historical analytics deletion.
       </p>
       <p>
         Backup copies, billing records required by law and security logs may remain under the
         operator’s retention rules. Ask the operator about applicable retention periods, hosting
         locations, international transfer safeguards or removal of personal information embedded in
         shared content.
+      </p>
+      <p>
+        <a href="/terms">Terms of service</a>
       </p>
     </main>
   );
