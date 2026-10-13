@@ -30,6 +30,7 @@ type ReportingRuntime = {
 
 // Extract only analytics identity from this project's cookie, never auth data.
 export function analyticsIdentity(headers: HeaderReader, key: string) {
+  if (!posthogCollectionEnabled()) return undefined;
   if (!readConsent(headers.get("cookie") ?? "")?.analytics) return undefined;
   const prefix = `ph_${key}_posthog=`;
   const cookie = headers
