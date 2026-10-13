@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import { siteUrl } from "../lib/site-url";
+import { pageMetadata } from "../lib/page-metadata";
 import "./globals.css";
 
 const instrumentSans = localFont({
@@ -16,10 +18,12 @@ const instrumentSerif = localFont({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://tidydesign.co"),
-  title: "Tidy — A product canvas",
-  description:
-    "A product canvas for designers, engineers, and agents. Work on interfaces together, connect agents through MCP, and self-host or extend the canvas.",
+  metadataBase: siteUrl,
+  ...pageMetadata(
+    "/",
+    "Tidy — Open-source design canvas for teams and AI agents",
+    "Design interfaces together in Tidy. Edit designs with AI agents through MCP, capture webpages, and self-host an open-source product canvas under Apache 2.0.",
+  ),
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
