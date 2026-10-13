@@ -1,3 +1,4 @@
+import { posthogCollectionEnabled } from "@/lib/posthog-policy";
 import { CookieConsent } from "@tidy/ui/cookie-consent";
 import "@tidy/ui/privacy.css";
 import type { Metadata } from "next";
@@ -38,7 +39,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       </head>
       <body className="min-h-full bg-primary-white font-sans text-primary-black">
         {children}
-        <CookieConsent analytics />
+        <CookieConsent
+          analytics={posthogCollectionEnabled()}
+          analyticsPaused={!posthogCollectionEnabled()}
+        />
       </body>
     </html>
   );

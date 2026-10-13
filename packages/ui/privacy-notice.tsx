@@ -31,8 +31,8 @@ export function PrivacyNotice({
       <p>
         Account details, workspace membership, designs, comments and connected accounts are used to
         provide the service you request. Authentication, session and security records protect the
-        service. Optional usage analytics uses your consent; declining it does not prevent using the
-        app.
+        service. Optional PostHog analytics is currently paused. Using the app does not require
+        agreement to optional tracking.
       </p>
       <p>
         Workspace content is visible to authorized members. Hosting, email and storage providers
@@ -46,11 +46,18 @@ export function PrivacyNotice({
         months and is limited to the site where you make the choice.
       </p>
       <p>
-        The marketing website does not use optional analytics. In the app, accepting analytics
-        allows PostHog cookies and local storage beginning with ph_ to measure usage and diagnose
-        problems. Session recording and automatic interaction capture are disabled. Use Cookie
-        settings to withdraw permission at any time; this stops analytics and clears its browser
-        storage.
+        The marketing website does not use optional analytics. PostHog collection in the app is
+        currently paused, including usage events, session recordings, error reports and feature-flag
+        requests. Cookie settings currently offers essential storage only; an earlier analytics
+        preference cannot restart collection. The app removes accessible legacy PostHog cookies and
+        browser storage when an updated page loads. Any future optional analytics will require a new
+        explicit choice and an updated notice before collection starts.
+      </p>
+      <p>
+        Pausing collection does not itself delete data previously sent to PostHog. Where historical
+        data remains, deletion requests are handled through the account cleanup process and the
+        privacy contact above. Publishing this notice or creating an account does not opt you into
+        analytics.
       </p>
       <h2>Export and deletion</h2>
       <p>
@@ -61,10 +68,10 @@ export function PrivacyNotice({
       </p>
       <p>
         Deleting your account removes personal records and credentials and revokes access. Shared
-        designs remain under anonymous attribution. Transfer ownership or delete organizations where
-        you are the last owner before closing your account. Uploaded personal images, runner data
-        and historical analytics are queued for removal; provider processing may take additional
-        time.
+        designs remain attributed to “Deleted user”; their content may still contain information
+        supplied by workspace members. Transfer ownership or delete organizations where you are the
+        last owner before closing your account. Uploaded personal images, runner data and historical
+        analytics are queued for removal; provider processing may take additional time.
       </p>
       <p>
         Backup copies, billing records required by law and security logs may remain under the

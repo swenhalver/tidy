@@ -5,7 +5,14 @@ import { Dialog } from "./dialog";
 import { Button } from "./button";
 import { CONSENT_EVENT, readConsent, setConsent } from "./consent";
 
-export function CookieConsent({ analytics = false }: { analytics?: boolean }) {
+export function CookieConsent({
+  analytics = false,
+  analyticsPaused = false,
+}: {
+  analytics?: boolean;
+  analyticsPaused?: boolean;
+}) {
+  const canAcceptAnalytics = analytics && !analyticsPaused;
   const dialog = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const id = useId();
@@ -14,7 +21,8 @@ export function CookieConsent({ analytics = false }: { analytics?: boolean }) {
   useEffect(() => {
     const refresh = () => setAllowed(readConsent(document.cookie)?.analytics === true);
     refresh();
-    if (!readConsent(document.cookie)) dialog.current?.showModal();
+    if (location.pathname !== "/privacy" && !readConsent(document.cookie))
+      dialog.current?.showModal();
     window.addEventListener(CONSENT_EVENT, refresh);
     window.addEventListener("storage", refresh);
     return () => {
@@ -23,7 +31,7 @@ export function CookieConsent({ analytics = false }: { analytics?: boolean }) {
     };
   }, []);
   function choose(value: boolean) {
-    setConsent(value);
+    setConsent(value && canAcceptAnalytics);
     if (!readConsent(document.cookie)) {
       setMessage("Your browser could not remember this choice. Optional analytics stays off.");
       return;
@@ -45,17 +53,20 @@ export function CookieConsent({ analytics = false }: { analytics?: boolean }) {
       <Dialog
         ref={dialog}
         className="tidy-cookie-dialog"
+        onClose={() => trigger.current?.focus()}
         aria-labelledby={`${id}-title`}
         aria-describedby={`${id}-description`}
       >
         <h2 id={`${id}-title`}>Your privacy choices</h2>
         <p id={`${id}-description`}>
           We use essential storage to keep you signed in and remember your preferences.
-          {analytics
-            ? " With your permission, PostHog helps us understand app usage and diagnose problems. Optional analytics is off until you accept."
-            : " This website does not use optional analytics or advertising cookies."}
+          {analyticsPaused
+            ? " Optional analytics is currently paused. No PostHog tracking is active."
+            : canAcceptAnalytics
+              ? " With your permission, PostHog helps us understand app usage and diagnose problems. Optional analytics is off until you accept."
+              : " This website does not use optional analytics or advertising cookies."}
         </p>
-        {analytics && (
+        {canAcceptAnalytics && (
           <p>
             Analytics: {allowed ? "on" : "off"}. You can change your choice anytime in Cookie
             settings. Your choice lasts six months on this site.
@@ -65,9 +76,9 @@ export function CookieConsent({ analytics = false }: { analytics?: boolean }) {
         {message && <p role="alert">{message}</p>}
         <div className="tidy-cookie-actions">
           <Button type="button" autoFocus onClick={() => choose(false)}>
-            {analytics ? "Reject optional cookies" : "Use essential cookies only"}
+            {canAcceptAnalytics ? "Reject optional cookies" : "Use essential cookies only"}
           </Button>
-          {analytics && (
+          {canAcceptAnalytics && (
             <Button type="button" onClick={() => choose(true)}>
               Accept analytics cookies
             </Button>

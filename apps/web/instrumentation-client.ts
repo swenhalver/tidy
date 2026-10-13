@@ -1,4 +1,5 @@
-// PostHog collection is paused. Do not import or initialize the browser SDK:
-// even default SDK behavior can send pageviews, replays, errors or flag requests.
-// Resuming collection requires a reviewed consent-aware implementation.
-export {};
+import { clearAnalyticsStorage } from "@/lib/privacy/browser-storage";
+
+// Keep the collection pause from #45: never load or initialize the browser SDK.
+// Removing legacy storage does not change authentication or grant consent.
+clearAnalyticsStorage();

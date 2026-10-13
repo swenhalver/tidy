@@ -1,3 +1,4 @@
+import * as posthogPolicy from "../posthog-policy";
 import { expect, spyOn, test } from "bun:test";
 import { readConsent, CONSENT_MAX_AGE } from "@tidy/ui/consent";
 import { createErrorReporter, analyticsIdentity } from "../posthog-server";
@@ -24,6 +25,7 @@ test("only current, explicit and valid consent enables analytics", () => {
   );
 });
 test("absent, rejected and expired consent causes no server analytics I/O or identity correlation", async () => {
+  const policy = spyOn(posthogPolicy, "posthogCollectionEnabled").mockReturnValue(true);
   const transport = spyOn(globalThis, "fetch").mockRejectedValue(
     new Error("Unexpected analytics request"),
   );
@@ -50,5 +52,6 @@ test("absent, rejected and expired consent causes no server analytics I/O or ide
     expect(transport).not.toHaveBeenCalled();
   } finally {
     transport.mockRestore();
+    policy.mockRestore();
   }
 });

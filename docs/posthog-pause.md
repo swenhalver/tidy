@@ -17,11 +17,12 @@ processing performed by the application or its other providers.
 - Vault is unavailable because its access flag is evaluated through PostHog.
   Existing Vault records remain stored; the pause does not grant access or
   delete records.
-- Feedback uses PostHog surveys, so the dialog shows that feedback is temporarily
-  unavailable. The form cannot submit or upload attachments.
-- PostHog data already collected is unchanged. Existing browser analytics
-  cookies and storage are not erased, but the updated app does not use them for
-  PostHog collection. Auth sessions continue to work.
+- The privacy implementation restores feedback through the first-party feedback
+  endpoint. It does not forward submissions or attachments to PostHog.
+- PostHog data already collected is unchanged by the collection pause. The privacy
+  implementation clears accessible legacy PostHog browser cookies/storage on load
+  and provides a separate historical-data erasure workflow. Auth sessions continue
+  to work.
 
 ## Rollout and follow-up
 
@@ -37,12 +38,12 @@ processing performed by the application or its other providers.
    events, identities, server reporting or flags.
 4. Handle historical data review and any deletion separately. This change does
    not certify legal compliance or perform deletion in PostHog.
-5. Preserve the pause when integrating the separate privacy/consent work in
-   PR #44. Resolve the instrumentation and feedback changes deliberately; merging
-   consent UI must not silently reactivate collection. A reviewed resumption
-   must cover browser and server consent, permitted fields, replay/error
-   settings, provider retention and stale browser storage/queues. Restoring
-   feedback or Vault independently needs a replacement for their PostHog dependency.
+5. The privacy/consent work in PR #44 preserves this pause. The app dialog offers
+   essential storage only. Before any reviewed resumption, implement consent-aware
+   browser/server collection, bump the consent version for a fresh opt-in, update
+   the notice, and review permitted fields, replay/error settings, provider
+   retention and stale browser storage/queues. Vault still needs a replacement for
+   its PostHog dependency if it should be restored while collection is paused.
 
 Transport tests explicitly override the policy only inside isolated fixtures
 with fake credentials and intercepted HTTP. The default-policy tests and the

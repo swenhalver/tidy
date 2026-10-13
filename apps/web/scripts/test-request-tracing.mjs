@@ -121,10 +121,14 @@ try {
     assert.equal(await response.text(), "ok");
   }
   if (!exerciseTransport) {
-    const timeout = await runtime.dispatchFetch("https://app.test/stall", { headers: { cookie: consentCookie() } });
+    const timeout = await runtime.dispatchFetch("https://app.test/stall", {
+      headers: { cookie: consentCookie() },
+    });
     assert.equal(timeout.status, 503);
     await timeout.text();
-    const bodyTimeout = await runtime.dispatchFetch("https://app.test/body-stall", { headers: { cookie: consentCookie() } });
+    const bodyTimeout = await runtime.dispatchFetch("https://app.test/body-stall", {
+      headers: { cookie: consentCookie() },
+    });
     await bodyTimeout.text().catch(() => {});
     // Allow any erroneous asynchronous export to reach the intercepted transport.
     await delay(100);
@@ -159,7 +163,9 @@ try {
       assert.equal(query.parentSpanId, auth.spanId);
     }
     assert.doesNotMatch(JSON.stringify(payloads), /private SQL|private token/);
-    const timeout = await runtime.dispatchFetch("https://app.test/stall", { headers: { cookie: consentCookie() } });
+    const timeout = await runtime.dispatchFetch("https://app.test/stall", {
+      headers: { cookie: consentCookie() },
+    });
     assert.equal(timeout.status, 503);
     await timeout.text();
     const timeoutDeadline = Date.now() + 5000;
