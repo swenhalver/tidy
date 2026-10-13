@@ -18,6 +18,9 @@ const workspace = fileURLToPath(new URL("../", import.meta.url));
 const directory = await mkdtemp(path.join(tmpdir(), "tidy-tracing-runtime-"));
 const exerciseTransport = process.argv.includes("--exercise-transport");
 const payloads = [];
+function consentCookie() {
+  return `tidy_consent=${encodeURIComponent(JSON.stringify({ version: 1, analytics: true, updatedAt: Date.now() }))}`;
+}
 let runtime;
 try {
   const options = {
@@ -108,7 +111,9 @@ try {
   );
   const responses = await Promise.all(
     Array.from({ length: 5 }, (_, index) =>
-      runtime.dispatchFetch("https://app.test/api/mcp", { headers: { "cf-ray": `ray-${index}` } }),
+      runtime.dispatchFetch("https://app.test/api/mcp", {
+        headers: { "cf-ray": `ray-${index}`, cookie: consentCookie() },
+      }),
     ),
   );
   for (const response of responses) {
@@ -116,10 +121,10 @@ try {
     assert.equal(await response.text(), "ok");
   }
   if (!exerciseTransport) {
-    const timeout = await runtime.dispatchFetch("https://app.test/stall");
+    const timeout = await runtime.dispatchFetch("https://app.test/stall", { headers: { cookie: consentCookie() } });
     assert.equal(timeout.status, 503);
     await timeout.text();
-    const bodyTimeout = await runtime.dispatchFetch("https://app.test/body-stall");
+    const bodyTimeout = await runtime.dispatchFetch("https://app.test/body-stall", { headers: { cookie: consentCookie() } });
     await bodyTimeout.text().catch(() => {});
     // Allow any erroneous asynchronous export to reach the intercepted transport.
     await delay(100);
@@ -154,7 +159,7 @@ try {
       assert.equal(query.parentSpanId, auth.spanId);
     }
     assert.doesNotMatch(JSON.stringify(payloads), /private SQL|private token/);
-    const timeout = await runtime.dispatchFetch("https://app.test/stall");
+    const timeout = await runtime.dispatchFetch("https://app.test/stall", { headers: { cookie: consentCookie() } });
     assert.equal(timeout.status, 503);
     await timeout.text();
     const timeoutDeadline = Date.now() + 5000;
@@ -167,7 +172,7 @@ try {
       "503",
     );
     const bodyTimeout = await runtime.dispatchFetch("https://app.test/body-stall", {
-      headers: { "cf-ray": "body-timeout-ray" },
+      headers: { "cf-ray": "body-timeout-ray", cookie: consentCookie() },
     });
     // The HTTP bridge can expose a failed empty stream as EOF. Assert the Worker
     // trace's body-failure outcome rather than a particular client-side error.

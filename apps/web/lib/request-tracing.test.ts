@@ -97,7 +97,7 @@ test("image failures distinguish capacity, quota and unavailable guards without 
       [new Error("private database detail"), "unexpected_error", 503],
     ] as const) {
       const trace = createRequestTrace(
-        new Request("https://app.test/api/assets/private-id"),
+        consentingRequest("https://app.test/api/assets/private-id"),
         c.runtime,
       );
       const response = trace.run(() => imageFailureResponse(error));
