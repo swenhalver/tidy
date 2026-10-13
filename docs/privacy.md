@@ -1,6 +1,6 @@
 # Account data export and deletion
 
-Settings provides personal-data JSON export and confirmed account deletion. This change is extracted from PR #44 and does not add cookie consent or public legal pages. The existing PostHog collection pause remains in effect; erasure calls remove historical data.
+Settings provides personal-data JSON export and confirmed account deletion. The account controls are already implemented on main. PR #44 adds cookie preferences and public privacy/terms pages while preserving the current account controls. The existing PostHog collection pause remains in effect; erasure calls remove historical data.
 
 ## User flows
 
@@ -45,6 +45,13 @@ Verification proofs use the existing `verification` table and expire after five 
 
 The dialog supports every sign-in method: password, Google and GitHub. Social-provider availability uses the same configuration as sign-in/sign-up. Only configured methods already linked to the account appear. Google controls its own sign-in prompts; account selection may use an existing Google session. Verify the live provider flow and popup behavior in staging after registering the callback.
 
+## Cookie preferences and public notices
+
+- Both the app and website provide cookie settings. The app states that analytics is paused and offers essential storage only. Preferences persist for 180 days on the current host/browser; missing, invalid or expired preferences prompt on the next updated page load. The public privacy notice is not covered by an automatic modal.
+- Accessible legacy PostHog browser storage is cleared when the updated app loads without removing authentication or other preferences. Existing open tabs must refresh. Collection remains hard-paused regardless of credentials or an older accepted preference.
+- A future analytics rollout must implement and review consent-aware collection, gate browser and server paths, update the public notice and bump the consent version for a fresh choice.
+- The app and website expose privacy and draft terms pages. `PRIVACY_CONTROLLER_NAME` and `PRIVACY_CONTACT_EMAIL` override the public operator defaults; provide them at build time for the static website and at runtime for the app.
+
 ## Validation
 
 Run `bun typecheck`, `bun lint`, `bun test`, `bun run test:privacy:db`, `bun run test:account-controls` and `bun run build` (extension builds require an explicit HTTPS `WXT_BELLA_URL`). The database harnesses own disposable localhost PostgreSQL clusters and exercise the restricted runtime role. No shared or production database is used.
@@ -53,4 +60,40 @@ The privacy suite covers export scope and secret exclusion, recent sessions, ori
 
 Complete staging and manual keyboard/screen-reader acceptance separately. Automated checks do not establish whole-site accessibility or legal compliance.
 
-Monitor cleanup capacity as well as failures and jobs awaiting verification. The scheduled endpoint processes one job per invocation; a five-minute schedule processes at most 288 jobs/day, plus deletion-triggered work. Account closures can create multiple jobs.
+Implementation verification after integrating the collection pause: the root test run
+passed 821 tests (673 fixture-dependent tests skipped), the dedicated account database
+suite passed all 99 tests, and all 8 privacy database tests passed. Type checking,
+lint and the production build passed using an example HTTPS extension origin.
+
+`bun apps/web/scripts/test-cookie-privacy-browser.mjs` covers new and returning
+browsers, essential-choice persistence, invalid/expired preferences, Escape/focus
+restoration, legacy PostHog storage cleanup with auth/preferences preserved, light/dark
+layout at 320 CSS pixels, an unobscured privacy notice, and no external requests.
+`bun apps/web/scripts/test-feedback-browser.mjs` verifies first-party feedback,
+attachment retries and dialog behavior without PostHog traffic. These are isolated
+browser fixtures; staging still needs real account/export/deletion and screen-reader
+acceptance. Earlier axe checks of the privacy controls found no WCAG 2.2 AA violations;
+that is not a whole-site accessibility certification.
+
+The privacy database suite runs in the CI matrix. Worker smoke tests cover both the
+production pause and the dormant transport using a test-only override with explicit
+consent fixtures and intercepted HTTP.
+
+## Integration with the PostHog pause
+
+The account integration fixture now applies the privacy migration before checking the
+restricted runtime grant manifest. This fixes the failing accounts CI job without
+relaxing its schema inventory or permissions checks. PostHog transport tests exercise
+the dormant consent-gated code only with test policy overrides and intercepted HTTP;
+the production policy stays false. The browser feedback test uses the first-party
+feedback endpoint and asserts there are no external requests.
+
+## Release review
+
+The public terms are a draft requiring operator review. Complete the privacy notice's
+lawful bases, recipients, transfer safeguards and retention criteria before production
+release. Complete staging cleanup and manual accessibility acceptance separately.
+
+Monitor cleanup capacity as well as failures and jobs awaiting verification. The scheduled
+endpoint processes one job per invocation; a five-minute schedule processes at most
+288 jobs/day, plus deletion-triggered work. Account closures can create multiple jobs.
