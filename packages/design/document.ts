@@ -1,3 +1,4 @@
+import { createImmutableDocumentParser } from "./immutable-document";
 import * as z from "zod";
 import { richTextSchema, richTextPlain } from "./rich-text";
 import { vectorPathSchema } from "./vector-schema";
@@ -763,8 +764,19 @@ export function buildDrawnNode(
 
 export { blankDesignDocument } from "./document-defaults";
 
+export type DocumentParser = (input: unknown) => DesignDocument;
+
 export function parseDesignDocument(input: unknown): DesignDocument {
-  const document = designDocumentSchema.parse(input);
+  return validateDesignDocument(designDocumentSchema.parse(input));
+}
+
+/** Editor-owned frozen snapshots retain identity across equivalent validated states. */
+export const parseImmutableDesignDocument = createImmutableDocumentParser(
+  designDocumentSchema,
+  validateDesignDocument,
+);
+
+function validateDesignDocument(document: DesignDocument): DesignDocument {
   resolvedDesignTokens(document);
   const ids = new Set<string>();
   const sourceKeys = new Set<string>();
