@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "tidy-local": {
+      "type": "streamable-http",
+      "url": "http://localhost:3000/api/mcp",
+      "protocolEra": "legacy"
+    }
+  }
+}

@@ -51,6 +51,24 @@ Stop the local database with `docker compose down`; adding `-v` removes its data
 Local Node development bypasses Worker-specific shared attempt limits. See
 [self-hosting](#self-hosting) before exposing any deployment publicly.
 
+## MCP connection testing
+
+With Node 22.19.0 or newer installed, launch the pinned web Inspector from the
+repository root:
+
+```sh
+# Against the local app (start bun dev separately):
+bun run mcp:inspector:local
+
+# Against an explicitly chosen hosted endpoint:
+bun run mcp:inspector --transport http --server-url https://your-tidy-host.example/api/mcp
+```
+
+The launcher opens the Inspector at `http://127.0.0.1:6274` with its session
+token. Select the server and connect, then complete Tidy's OAuth sign-in.
+See [MCP testing](docs/mcp-testing.md) for tool checks, protocol debugging, and
+Claude Code, OpenCode and Pi workflows.
+
 ## Workspaces
 
 | Workspace                  | Purpose                                     |
