@@ -55,7 +55,8 @@ Do not commit client secrets, bearer tokens or exported protocol traces.
 4. Test design edits only in a disposable test file when you intend to make
    changes. Reads require `mcp:read`; edits also require `mcp:write`. Inspector
    supports additional-scope authorization when a tool requires more access.
-   Request `offline_access` when checking refresh-token behavior.
+   New Tidy connections request design read and write access together; existing
+   read-only grants remain read-only until the user authorizes again. Request `offline_access` when checking refresh-token behavior.
 
 The preset selects the legacy protocol era for comparison with existing
 clients. To test the 2026-07-28 protocol explicitly, launch the hosted endpoint
@@ -91,10 +92,7 @@ Merge this entry into your `opencode.json`:
     "tidy-test": {
       "type": "remote",
       "url": "https://your-tidy-host.example/api/mcp",
-      "enabled": true,
-      "oauth": {
-        "scope": "mcp:read mcp:write offline_access"
-      }
+      "enabled": true
     }
   }
 }
@@ -106,32 +104,28 @@ opencode mcp list
 opencode mcp debug tidy-test
 ```
 
-Use only `mcp:read` for a read-only grant. Explicit scopes let you test write
-authorization in clients that do not automatically request more scopes after
-a read-only connection. See [OpenCode's MCP documentation](https://opencode.ai/docs/mcp-servers/).
+New connections should show design read and write access on Tidy's consent
+screen. OpenCode 1.18.35 does not complete write step-up authorization from an
+existing read-only grant. Clear that grant with `opencode mcp logout tidy-test`,
+then authorize again and approve design editing. Setting `oauth.scope` did not
+override Tidy's challenge in our reproduction. See
+[OpenCode's MCP documentation](https://opencode.ai/docs/mcp-servers/).
 
 ### Pi
 
-Pi's core [does not include an MCP client](https://github.com/earendil-works/pi/tree/main/packages/coding-agent#philosophy).
-There is no built-in `pi mcp add` or `pi mcp login` workflow. For native MCP
-tools in Pi, use an MCP extension that supports Streamable HTTP and OAuth,
-following that extension's configuration and sign-in instructions.
-
-For testing from Pi's shell tool without installing an extension, complete
-OAuth in the web Inspector first, then run the same pinned Inspector in CLI
-mode from the repository root:
+Pi 1.2.0 includes an MCP client with Streamable HTTP and OAuth support:
 
 ```sh
-bunx --no-install mcp-inspector --cli --transport http \
-  --server-url https://your-tidy-host.example/api/mcp \
-  --stored-auth-only --method tools/list
-
-bunx --no-install mcp-inspector --cli --transport http \
-  --server-url https://your-tidy-host.example/api/mcp \
-  --stored-auth-only --method tools/call --tool-name list_organizations
+pi mcp add tidy-test --url https://your-tidy-host.example/api/mcp
+pi mcp login tidy-test
+pi mcp list --json
 ```
 
-This checks Tidy through Inspector using Pi as the command runner; it does not
-verify a Pi MCP extension. `--stored-auth-only` fails without a stored grant
-instead of opening a login flow that the agent cannot complete. Use the exact
-same endpoint URL and OS account as the web Inspector.
+In a Pi session, ask it to list your Tidy organizations and files. Its default
+MCP exposure is codemode; our native read/write checks used that default.
+See [Pi's documentation](https://github.com/earendil-works/pi/tree/main/packages/coding-agent).
+
+For each client, verify writes in a disposable file: create a file, add a frame,
+read the document, patch the frame's name and fill with the returned revision,
+then read the document and file again. Confirm the saved values match the edit;
+a successful connection or tool listing alone does not verify writes.
