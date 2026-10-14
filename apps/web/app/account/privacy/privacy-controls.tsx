@@ -206,8 +206,14 @@ export function PrivacyControls({ email }: { email: string }) {
           Download your profile, memberships, comments, connections, agent conversations and designs
           you created, plus feedback stored in Tidy, as JSON. Passwords and access tokens are
           excluded. Export complete design files with images from the editor. For historical
-          analytics, legacy feedback or other records held outside Tidy, contact the operator. We’ll
-          ask you to authenticate again when needed.
+          analytics, legacy feedback or other records held outside Tidy, use the contact in our{" "}
+          <NavigationLink
+            href="/privacy"
+            className="rounded-sm font-medium text-ink hover:text-secondary-ink focus-visible:outline-2 focus-visible:outline-offset-4"
+          >
+            privacy notice
+          </NavigationLink>
+          . We’ll ask you to authenticate again when needed.
         </p>
         <Button disabled={pending} onClick={() => void download()}>
           {operation === "export" ? "Working…" : "Download my data"}
