@@ -539,7 +539,10 @@ export function FilesBrowser({
         <div className="flex items-center gap-2">
           {canEdit && !archived && (
             <>
-              <NewFileButton folderId={currentFolder?.id ?? null} />
+              <NewFileButton
+                folderId={currentFolder?.id ?? null}
+                folderName={currentFolder?.name ?? "Files"}
+              />
               {!currentFolder && (
                 <button
                   type="button"

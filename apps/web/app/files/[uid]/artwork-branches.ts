@@ -7,6 +7,7 @@ export type ArtworkBranchProps = {
   childrenById: ReadonlyMap<string | null, readonly DesignNode[]>;
   visibleRootIds: ReadonlySet<string>;
   tokens: Record<string, string>;
+  previewAssetUrls?: Record<string, string>;
   selectedIds: readonly string[];
   prototypeMode: boolean;
   prototypeArtboardId: string | null;
@@ -38,6 +39,7 @@ export function createArtworkBranches() {
   let previousCrop: string | null = null;
   let previousEditing: string | null = null;
   let previousTokens: ArtworkBranchProps["tokens"] | undefined;
+  let previousAssets: ArtworkBranchProps["previewAssetUrls"];
   return (props: ArtworkBranchProps) => {
     const mark = (id: string, map: ArtworkBranchProps["nodesById"]) => {
       let node = map.get(id);
@@ -79,6 +81,24 @@ export function createArtworkBranches() {
         if (parentId !== null && !props.childrenById.has(parentId)) mark(parentId, props.nodesById);
     }
     previousChildren = props.childrenById;
+    if (previousAssets !== props.previewAssetUrls) {
+      // Restoring a draft can replace blob URLs without changing any layer.
+      // Invalidate only masks using changed assets, including their ancestors.
+      for (const node of props.nodesById.values()) {
+        if (!node.mask?.enabled) continue;
+        const source = props.nodesById.get(node.mask.sourceId);
+        if (
+          source?.style.paints?.some(
+            (paint) =>
+              paint.type === "image" &&
+              paint.assetId &&
+              previousAssets?.[paint.assetId] !== props.previewAssetUrls?.[paint.assetId],
+          )
+        )
+          mark(node.id, props.nodesById);
+      }
+    }
+    previousAssets = props.previewAssetUrls;
     const selection = new Set(props.selectedIds);
     for (const id of new Set([...selection, ...previousSelection]))
       if (selection.has(id) !== previousSelection.has(id)) mark(id, props.nodesById);
@@ -129,11 +149,21 @@ export function createArtworkBranches() {
       const selected = selection.has(node.id),
         cropping = props.cropId === node.id,
         editing = props.editingTextId === node.id;
-      const composite = vectorCompositeStyle(node, allNodes, props.tokens, parent);
+      const composite = vectorCompositeStyle(
+        node,
+        allNodes,
+        props.tokens,
+        parent,
+        (id) => props.previewAssetUrls?.[id] ?? `/api/assets/${id}`,
+      );
       if (
         old &&
         old.parent === parent &&
         old.composite.maskImage === composite.maskImage &&
+        old.composite.opacity === composite.opacity &&
+        old.composite.maskSize === composite.maskSize &&
+        old.composite.maskPosition === composite.maskPosition &&
+        old.composite.maskMode === composite.maskMode &&
         old.flowIndex === flowIndex &&
         old.viewportWidth === viewportWidth &&
         old.selected === selected &&

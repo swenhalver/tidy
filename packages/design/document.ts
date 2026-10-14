@@ -9,6 +9,9 @@ import { designTokensSchema, tokenBindingsSchema } from "./token-schema";
 import { resolveNodeTokens, resolvedDesignTokens } from "./design-tokens";
 import { prototypeInteractionSchema, validatePrototype } from "./prototype";
 
+import { DESIGN_DOCUMENT_LIMITS } from "./document-limits";
+export { DESIGN_DOCUMENT_LIMITS } from "./document-limits";
+
 const number = z.number().finite();
 const color = z.string().regex(/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/);
 const tokenName = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/);
@@ -41,7 +44,7 @@ const responsiveBreakpoint = z
     gridRowTracks: z.array(gridTrack).max(12).optional(),
     wrap: z.boolean().optional(),
     align: z.enum(["start", "center", "end", "stretch", "baseline"]).optional(),
-    justify: z.enum(["start", "center", "end", "space-between"]).optional(),
+    justify: z.enum(["start", "center", "end", "space-between", "space-evenly"]).optional(),
     widthMode: z.enum(["fixed", "fill", "hug"]).optional(),
     heightMode: z.enum(["fixed", "fill", "hug"]).optional(),
     minWidth: number.min(0).max(5000).optional(),
@@ -138,6 +141,10 @@ const designPaintSchema = z.discriminatedUnion("type", [
       ...paintBase,
       type: z.literal("image"),
       assetId: z.string().uuid().optional(),
+      intrinsicSize: z
+        .object({ width: number.min(1).max(1000000), height: number.min(1).max(1000000) })
+        .strict()
+        .optional(),
       fit: z.enum(["contain", "cover", "fill"]).default("cover"),
       positionX: number.min(0).max(100).default(50),
       positionY: number.min(0).max(100).default(50),
@@ -415,7 +422,7 @@ const baseNodeSchema = z
       .optional()
       .describe("Cross-axis alignment. Set explicitly on content containers and controls."),
     justify: z
-      .enum(["start", "center", "end", "space-between"])
+      .enum(["start", "center", "end", "space-between", "space-evenly"])
       .optional()
       .describe("Main-axis alignment. Set explicitly on content containers and controls."),
     wrap: z.boolean().optional(),
@@ -708,7 +715,7 @@ export const designDocumentSchema = z
         z.object({ name: z.string().trim().min(1).max(120), style }).strict(),
       )
       .optional(),
-    nodes: z.array(designNodeSchema).max(5000),
+    nodes: z.array(designNodeSchema).max(DESIGN_DOCUMENT_LIMITS.nodes),
     warnings: z
       .array(
         z.object({
@@ -719,14 +726,14 @@ export const designDocumentSchema = z
         }),
       )
       .max(500),
-    editedNodeIds: z.array(z.string().max(120)).max(5000).default([]),
+    editedNodeIds: z.array(z.string().max(120)).max(DESIGN_DOCUMENT_LIMITS.nodes).default([]),
     deletedSourceKeys: z
       .array(deletedSourceKeySchema)
       // Allow the previous history plus one full-document deletion while
       // cleaning obsolete web-capture markers. Retained history stays bounded.
-      .max(10000)
+      .max(DESIGN_DOCUMENT_LIMITS.nodes * 2)
       .transform((items) => items.filter((item) => !isWebCaptureImportKey(item.importKey)))
-      .pipe(z.array(deletedSourceKeySchema).max(5000))
+      .pipe(z.array(deletedSourceKeySchema).max(DESIGN_DOCUMENT_LIMITS.nodes))
       .default([]),
   })
   .strict();
