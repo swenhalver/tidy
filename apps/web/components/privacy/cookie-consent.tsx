@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { privacyPolicyUrl } from "@/lib/privacy-notice";
 import { recordBrowserConsent, recordBrowserWithdrawal } from "@/lib/privacy/receipt-client";
 import { browserCollectionEnabled } from "@/lib/posthog-client";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { SelectMenu } from "@/components/ui/select-menu";
+import { OPEN_PRIVACY_CHOICES } from "./privacy-choices-button";
 import {
   browserConsent,
   chooseConsent,
@@ -20,20 +22,18 @@ const purposes: { key: ConsentPurpose; title: string; description: string }[] = 
   {
     key: "analytics",
     title: "Usage analytics",
-    description:
-      "Page visits, interactions, feature usage and optional surveys help us improve Tidy. Uses PostHog.",
+    description: "Page visits, interactions, feature usage and optional surveys.",
   },
   {
     key: "replay",
     title: "Session replay",
     description:
-      "A masked reconstruction of navigation, clicks and scrolling helps us understand usability problems. Inputs, text, images and design canvases are hidden.",
+      "Navigation, clicks and scrolling. Inputs, text, images and design canvases are hidden.",
   },
   {
     key: "diagnostics",
     title: "Browser performance and errors",
-    description:
-      "Browser loading and interaction timings and redacted browser errors help us find and fix technical problems.",
+    description: "Loading and interaction timings, plus redacted browser errors.",
   },
 ];
 const actionClass =
@@ -56,7 +56,22 @@ export function CookieConsent() {
       dialog.current?.showModal();
       heading.current?.focus({ preventScroll: true });
     }
-    return subscribeConsent(refresh);
+    const open = (event: Event) => {
+      trigger.current = (event as CustomEvent<HTMLButtonElement>).detail;
+      // Finish rendering the controls before showModal measures and displays them.
+      flushSync(() => {
+        setCustomize(true);
+        setChoices(browserConsent() ?? ESSENTIAL_ONLY);
+      });
+      dialog.current?.showModal();
+      heading.current?.focus({ preventScroll: true });
+    };
+    window.addEventListener(OPEN_PRIVACY_CHOICES, open);
+    const unsubscribe = subscribeConsent(refresh);
+    return () => {
+      window.removeEventListener(OPEN_PRIVACY_CHOICES, open);
+      unsubscribe();
+    };
   }, []);
   async function choose(next: ConsentChoices, close = false) {
     const generation = ++choiceGeneration.current;
@@ -65,22 +80,13 @@ export function CookieConsent() {
     setChoices(remembered ? next : ESSENTIAL_ONLY);
     setMessage(
       remembered
-        ? "Recording your choice…"
+        ? ""
         : "Your browser could not remember the choice. Optional collection stays off in this tab.",
     );
+    if (close) dialog.current?.close();
     try {
-      if (!remembered) {
-        await recordBrowserWithdrawal();
-        if (generation !== choiceGeneration.current) return;
-        setMessage(
-          "Your browser could not store the choice. All optional collection has been stopped and withdrawal recorded.",
-        );
-        return;
-      }
-      await recordBrowserConsent();
-      if (generation !== choiceGeneration.current) return;
-      setMessage("Your choice applies immediately.");
-      if (close) dialog.current?.close();
+      if (remembered) await recordBrowserConsent();
+      else await recordBrowserWithdrawal();
     } catch {
       if (generation !== choiceGeneration.current) return;
       setNeedsRetry(true);
@@ -91,25 +97,15 @@ export function CookieConsent() {
   }
   return (
     <aside className="ph-no-capture" aria-label="Privacy choices">
-      <button
-        ref={trigger}
-        type="button"
-        className="fixed bottom-3 left-3 z-50 min-h-11 rounded-lg border border-border bg-panel px-3 text-xs text-secondary-ink hover:bg-hover-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
-        onClick={() => {
-          setCustomize(true);
-          setMessage("");
-          dialog.current?.showModal();
-          heading.current?.focus({ preventScroll: true });
-        }}
-      >
-        Privacy choices
-      </button>
       <Dialog
         ref={dialog}
+        id="privacy-choices-dialog"
         size="lg"
         aria-labelledby="privacy-choice-title"
         aria-describedby="privacy-choice-description"
-        onClose={() => trigger.current?.focus()}
+        onClose={() => {
+          if (trigger.current?.isConnected) trigger.current.focus();
+        }}
       >
         <div className="flex items-start justify-between gap-4">
           <h2
@@ -131,23 +127,21 @@ export function CookieConsent() {
         </div>
         <p id="privacy-choice-description" className="mt-3 text-sm leading-6 text-secondary-ink">
           {collectionEnabled
-            ? "Tidy uses essential storage for sign-in and preferences. Choose whether to allow PostHog analytics, masked replay or browser diagnostics. Optional tracking stays off until you choose."
-            : "Tidy uses essential storage for sign-in and your preferences. Optional PostHog browser collection is paused. Only essential storage is available."}
+            ? "Optional PostHog analytics, masked replay and browser diagnostics stay off until you choose."
+            : "Only essential storage for sign-in and preferences is active. Optional PostHog collection is off."}
         </p>
+        {collectionEnabled && (
+          <p className="mt-3 text-sm leading-6 text-secondary-ink">
+            When signed in, optional activity is linked to your account ID and email.
+          </p>
+        )}
         <p className="mt-3 text-sm leading-6 text-secondary-ink">
-          Our{" "}
           <a
             href={privacyPolicyUrl}
             className="rounded-sm text-ink underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
           >
-            privacy and cookie policy
-          </a>{" "}
-          covers server fault monitoring separately and explains how to object.
-        </p>
-        <p className="mt-3 text-sm leading-6 text-secondary-ink">
-          {collectionEnabled
-            ? "When signed in, selected activity, including replay, is linked to your account ID and email. You can use Tidy without accepting. Change or withdraw choices here anytime. Choices last 180 days."
-            : "Your essential-only preference lasts 180 days in this browser. Any future optional collection will require a separate choice."}
+            Privacy and cookie policy
+          </a>
         </p>
         {collectionEnabled && customize && (
           <div className="mt-5 mb-5 space-y-5 border-y border-border py-5">

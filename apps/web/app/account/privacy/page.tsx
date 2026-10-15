@@ -1,4 +1,5 @@
 export const metadata = { title: "Your account · Tidy" };
+import { PrivacyChoicesButton } from "@/components/privacy/privacy-choices-button";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
@@ -52,6 +53,7 @@ export default async function AccountPrivacyPage() {
         invitations={activeInvitations(invitations)}
       />
       <PrivacyControls email={account.user.email} />
+      <PrivacyChoicesButton />
     </main>
   );
 }

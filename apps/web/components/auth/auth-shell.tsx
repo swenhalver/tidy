@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { TidyLogo } from "@/components/ui/tidy-logo";
 import { NavigationLink } from "@/components/ui/navigation-link";
+import { PrivacyChoicesButton } from "@/components/privacy/privacy-choices-button";
 import { privacyPolicyUrl } from "@/lib/privacy-notice";
 
 type AuthShellProps = {
@@ -26,6 +27,7 @@ export function AuthShell({ title, description, children }: AuthShellProps) {
           Privacy policy
         </NavigationLink>
       </div>
+      <PrivacyChoicesButton className="fixed bottom-3 right-3 z-50 min-h-11 rounded-lg border border-border bg-panel px-3 text-xs text-secondary-ink hover:bg-hover-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink" />
     </main>
   );
 }
