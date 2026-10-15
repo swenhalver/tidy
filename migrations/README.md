@@ -52,5 +52,12 @@ Production application still requires an explicitly approved target and operatio
 `20261011-account-privacy.sql` follows the existing migrations. It adds anonymous
 shared-work attribution, the durable external-erasure outbox, and consent-independent
 feedback submissions. Reapply the runtime grant manifest after applying it to an
-explicitly approved target. See [privacy rollout](../docs/privacy.md) for required
-processor credentials, the cleanup schedule and retention/access operations.
+explicitly approved target.
+
+## Analytics consent
+
+`20261015-analytics-consent.sql` follows `20261011-account-privacy.sql`. It adds
+versioned consent decisions, an external-erasure review job type and minimal
+operator completion receipts. Apply it before deploying the PostHog restart code,
+then reapply the runtime grants manifest. Local initialization includes it; no
+production migration is automatic.
