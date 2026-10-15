@@ -476,6 +476,7 @@ export function FilesBrowser({
           </Link>
           {renaming?.kind === "file" && renaming.file.id === file.id ? (
             <input
+              data-ph-public-label
               aria-label="File name"
               autoFocus
               maxLength={120}
@@ -505,7 +506,9 @@ export function FilesBrowser({
         <DateCell value={file.updatedAt} asOf={asOf} className="hidden sm:block" />
         <DateCell value={file.createdAt} asOf={asOf} className="hidden lg:block" />
         <CreatorCell name={file.creatorName} />
-        <span className="hidden text-sm text-secondary-ink xl:block">—</span>
+        <span data-ph-public className="hidden text-sm text-secondary-ink xl:block">
+          —
+        </span>
         <button
           type="button"
           aria-label={`Actions for ${file.name}`}
@@ -529,12 +532,21 @@ export function FilesBrowser({
           href="/files"
           className="mb-5 inline-flex items-center gap-2 text-sm text-secondary-ink hover:text-primary-black"
         >
-          <Icon name="back" size={16} /> Files
+          <Icon name="back" size={16} />{" "}
+          <span data-ph-public style={{ display: "contents" }}>
+            Files
+          </span>
         </Link>
       )}
       <div className={filesHeader}>
-        <h1 className="min-w-0 truncate text-3xl font-semibold tracking-tight">
-          {archived ? "Archive" : (currentFolder?.name ?? "Files")}
+        <h1 data-ph-public className="min-w-0 truncate text-3xl font-semibold tracking-tight">
+          {archived ? (
+            "Archive"
+          ) : currentFolder ? (
+            <span data-ph-private>{currentFolder.name}</span>
+          ) : (
+            "Files"
+          )}
         </h1>
         <div className="flex items-center gap-2">
           {canEdit && !archived && (
@@ -550,17 +562,20 @@ export function FilesBrowser({
                   disabled={busy || creatingFolder}
                   className="rounded-lg border border-primary-grey px-4 py-2.5 text-sm font-medium hover:bg-surface/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-orange disabled:opacity-50"
                 >
-                  + New folder
+                  <span data-ph-public>+ New folder</span>
                 </button>
               )}
             </>
           )}
           <div
+            data-ph-public-label
+            data-ph-public
             role="group"
             aria-label="File view"
             className="flex rounded-lg border border-primary-grey/70 p-1"
           >
             <button
+              data-ph-public-label
               type="button"
               aria-label="Grid view"
               aria-pressed={view === "grid"}
@@ -568,6 +583,7 @@ export function FilesBrowser({
               className={`rounded-md p-2 focus-visible:outline-2 focus-visible:outline-primary-orange ${view === "grid" ? "bg-primary-grey/35" : "text-secondary-ink hover:bg-primary-grey/20"}`}
             >
               <svg
+                data-ph-public
                 aria-hidden="true"
                 width="18"
                 height="18"
@@ -583,6 +599,7 @@ export function FilesBrowser({
               </svg>
             </button>
             <button
+              data-ph-public-label
               type="button"
               aria-label="List view"
               aria-pressed={view === "list"}
@@ -590,6 +607,7 @@ export function FilesBrowser({
               className={`rounded-md p-2 focus-visible:outline-2 focus-visible:outline-primary-orange ${view === "list" ? "bg-primary-grey/35" : "text-secondary-ink hover:bg-primary-grey/20"}`}
             >
               <svg
+                data-ph-public
                 aria-hidden="true"
                 width="18"
                 height="18"
@@ -622,6 +640,7 @@ export function FilesBrowser({
                 <div className="flex h-24 items-center gap-4 rounded-xl border border-primary-orange px-5">
                   <Icon name="folder" size={28} />
                   <input
+                    data-ph-public-label
                     aria-label="New folder name"
                     autoFocus
                     value={folderDraft}
@@ -652,6 +671,7 @@ export function FilesBrowser({
                   <div className={folderCard}>
                     <Icon name="folder" size={28} className="opacity-65" />
                     <input
+                      data-ph-public-label
                       aria-label="Folder name"
                       autoFocus
                       maxLength={120}
@@ -700,6 +720,7 @@ export function FilesBrowser({
       {view === "list" && (
         <div className="pt-9">
           <div
+            data-ph-public
             className={`${listColumns} border-b border-primary-grey/60 px-3 pb-3 text-xs font-medium text-secondary-ink`}
           >
             <span>Name</span>
@@ -722,6 +743,7 @@ export function FilesBrowser({
                 <span className="flex min-w-0 items-center gap-4">
                   <Icon name="folder" size={28} className="opacity-65" />
                   <input
+                    data-ph-public-label
                     aria-label="New folder name"
                     autoFocus
                     value={folderDraft}
@@ -759,6 +781,7 @@ export function FilesBrowser({
                         className="flex size-5 shrink-0 items-center justify-center rounded text-secondary-ink hover:bg-primary-grey/25 focus-visible:outline-2 focus-visible:outline-primary-orange"
                       >
                         <svg
+                          data-ph-public
                           aria-hidden="true"
                           width="16"
                           height="16"
@@ -780,6 +803,7 @@ export function FilesBrowser({
                       </span>
                       {renaming?.kind === "folder" && renaming.folder.id === folder.id ? (
                         <input
+                          data-ph-public-label
                           aria-label="Folder name"
                           autoFocus
                           maxLength={120}
@@ -809,7 +833,9 @@ export function FilesBrowser({
                     <DateCell value={folder.updatedAt} asOf={asOf} className="hidden sm:block" />
                     <DateCell value={folder.createdAt} asOf={asOf} className="hidden lg:block" />
                     <CreatorCell name={folder.creatorName} />
-                    <span className="hidden text-sm text-secondary-ink xl:block">—</span>
+                    <span data-ph-public className="hidden text-sm text-secondary-ink xl:block">
+                      —
+                    </span>
                     <button
                       type="button"
                       aria-label={`Actions for folder ${folder.name}`}
@@ -825,7 +851,7 @@ export function FilesBrowser({
                   {expandedFolderIds.includes(folder.id) && (
                     <>
                       {visibleFilesInFolder(folder.id).length === 0 && (
-                        <li className="py-4 pl-14 text-sm text-secondary-ink">
+                        <li data-ph-public className="py-4 pl-14 text-sm text-secondary-ink">
                           No files in this folder.
                         </li>
                       )}
@@ -839,7 +865,7 @@ export function FilesBrowser({
           {visibleFiles.length === 0 &&
             (visibleFolders.length === 0 || archived || currentFolder) &&
             !creatingFolder && (
-              <p className="py-7 text-sm text-secondary-ink">
+              <p data-ph-public className="py-7 text-sm text-secondary-ink">
                 {archived
                   ? "No archived files."
                   : currentFolder
@@ -883,6 +909,7 @@ export function FilesBrowser({
                   <div className="p-4 pr-12">
                     {renaming?.kind === "file" && renaming.file.id === file.id ? (
                       <input
+                        data-ph-public-label
                         aria-label="File name"
                         autoFocus
                         maxLength={120}
@@ -908,7 +935,9 @@ export function FilesBrowser({
                       {file.nodeCount
                         ? `${file.nodeCount} layers`
                         : `${file.frameCount} ${file.frameCount === 1 ? "frame" : "frames"} · ${file.rectangleCount} ${file.rectangleCount === 1 ? "rectangle" : "rectangles"}`}{" "}
-                      ·{" "}
+                      <span data-ph-public style={{ display: "contents" }}>
+                        ·
+                      </span>{" "}
                       {new Date(file.updatedAt).toLocaleDateString("en-IE", {
                         day: "numeric",
                         month: "short",
@@ -932,7 +961,7 @@ export function FilesBrowser({
             ))}
           </ul>
         ) : (visibleFolders.length === 0 && !creatingFolder) || archived || currentFolder ? (
-          <p className="pt-9 text-sm text-secondary-ink">
+          <p data-ph-public className="pt-9 text-sm text-secondary-ink">
             {archived
               ? "No archived files."
               : currentFolder
@@ -943,6 +972,7 @@ export function FilesBrowser({
 
       {menu && (
         <div
+          data-ph-public
           ref={menuRef}
           role="menu"
           aria-label={`Actions for ${menu.kind === "file" ? menu.file.name : menu.folder.name}`}
@@ -1056,6 +1086,7 @@ export function FilesBrowser({
               {visibleFolders.map((folder) => (
                 <button
                   key={folder.id}
+                  data-ph-private
                   type="button"
                   role="menuitem"
                   className={menuItem}
@@ -1178,7 +1209,11 @@ export function FilesBrowser({
         padded={false}
       >
         <div className="px-6 pb-6 pt-7">
-          <h2 id="delete-folder-title" className="text-xl font-semibold tracking-tight">
+          <h2
+            data-ph-public
+            id="delete-folder-title"
+            className="text-xl font-semibold tracking-tight"
+          >
             {deletingFile ? "Delete file permanently?" : "Delete folder?"}
           </h2>
           <p id="delete-folder-description" className="mt-3 text-sm leading-6 text-secondary-ink">
@@ -1197,6 +1232,7 @@ export function FilesBrowser({
           </p>
           <div className="mt-7 flex justify-end gap-3">
             <button
+              data-ph-public
               type="button"
               autoFocus
               onClick={() => deleteDialogRef.current?.close()}
@@ -1205,6 +1241,7 @@ export function FilesBrowser({
               Cancel
             </button>
             <button
+              data-ph-public
               type="button"
               disabled={busy || (!deletingFolder && !deletingFile)}
               onClick={() => {
