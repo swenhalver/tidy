@@ -4458,6 +4458,45 @@ for (const state of ["unverified", "unknown-role", "removed", "foreign"] as cons
   });
 }
 
+integration(
+  "direct imports into files without documents require recoverable source identity",
+  async () => {
+    const { createDesignFileForUser } = await import("../design/service");
+    const docs = await import("../design/document-service");
+    const { buildDrawnNode } = await import("../design/document");
+    const file = await createDesignFileForUser(ownerId, orgId, "Empty import target");
+    const staged = await docs.createImport(invitedId, orgId, "Direct import", file.id);
+    expect(staged.expectedRevision).toBe(0);
+    const node = buildDrawnNode("source-frame", "artboard", null, {
+      x: 0,
+      y: 0,
+      width: 200,
+      height: 200,
+    });
+    await docs.putImportChunk(invitedId, staged.importId, "screen", [node]);
+    await expect(docs.commitImport(invitedId, staged.importId)).rejects.toThrow(
+      "source.project and source.route",
+    );
+    expect(
+      (await db.query('select 1 from "designDocument" where "fileId"=$1', [file.id])).rowCount,
+    ).toBe(0);
+    expect(
+      (await db.query('select "status" from "designImport" where "id"=$1', [staged.importId]))
+        .rows[0].status,
+    ).toBe("staging");
+    await docs.putImportChunk(invitedId, staged.importId, "metadata", [], {
+      project: "fixture",
+      route: "/direct-import",
+    });
+    const committed = await docs.commitImport(invitedId, staged.importId);
+    expect(committed).toMatchObject({ fileId: file.id, revision: 1 });
+    expect((await docs.getDocument(invitedId, file.id))?.content).toMatchObject({
+      source: { project: "fixture", route: "/direct-import" },
+      nodes: [{ id: node.id, importKey: "fixture:/direct-import" }],
+    });
+  },
+);
+
 integration("committed import retries require the current same-tenant active file", async () => {
   const docs = await import("../design/document-service");
   const { buildDrawnNode } = await import("../design/document");
@@ -4757,20 +4796,24 @@ integration(
     );
     const staged = await docs.createImport(invitedId, orgId, "Existing file import", file.id);
     expect(staged.expectedRevision).toBe(replaced.revision);
-    await docs.putImportChunk(
-      invitedId,
-      staged.importId,
-      "one",
-      [
-        buildDrawnNode(crypto.randomUUID(), "artboard", null, {
-          x: 600,
-          y: 0,
-          width: 200,
-          height: 200,
-        }),
-      ],
-      { project: "fixture", route: "/editor" },
+    await docs.putImportChunk(invitedId, staged.importId, "one", [
+      buildDrawnNode(crypto.randomUUID(), "artboard", null, {
+        x: 600,
+        y: 0,
+        width: 200,
+        height: 200,
+      }),
+    ]);
+    await expect(docs.validateImport(invitedId, staged.importId)).rejects.toThrow(
+      "source.project and source.route",
     );
+    await expect(docs.commitImport(invitedId, staged.importId)).rejects.toThrow(
+      "source.project and source.route",
+    );
+    await docs.putImportChunk(invitedId, staged.importId, "metadata", [], {
+      project: "fixture",
+      route: "/editor",
+    });
     expect((await docs.validateImport(invitedId, staged.importId)).layout.valid).toBe(true);
     const committed = await docs.commitImport(invitedId, staged.importId);
     expect(committed.fileId).toBe(file.id);
