@@ -235,7 +235,11 @@ export function nativeSvg(
     const reasons = [
       node.mask ? "vector masks" : "",
       node.vectorBoolean ? "boolean geometry" : "",
-      node.vectorPath && "contours" in node.vectorPath ? "authored vector geometry" : "",
+      node.vectorPath &&
+      "contours" in node.vectorPath &&
+      !clone.querySelector(":scope > img[data-vector-path]")
+        ? "vector geometry could not be measured"
+        : "",
       node.richText?.some((paragraph) => paragraph.list) ? "text lists" : "",
       node.style.backdropBlur ? "backdrop blur" : "",
       node.style.shadows?.length || node.style.shadow ? "box shadows" : "",
@@ -287,11 +291,6 @@ export function nativeSvg(
             { width: w, height: h },
             tokens,
           );
-          if (paint.type === "radial" && paint.rotation)
-            definition.definition = definition.definition.replace(
-              " scale(",
-              ` rotate(${paint.rotation}) scale(`,
-            );
           defs.push(definition.definition);
           return `<path d="${path}" fill="${xml(definition.fill)}" opacity="${paint.opacity}" style="mix-blend-mode:${paint.blendMode ?? "normal"}"/>`;
         })
