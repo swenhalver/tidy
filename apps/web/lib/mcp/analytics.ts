@@ -1,0 +1,199 @@
+import "server-only";
+import { PostHogMCP } from "@posthog/mcp";
+import type { McpServer } from "@modelcontextprotocol/server";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { queueMcpMonitoringErasure, mcpMonitoringId } from "@/lib/privacy/mcp-retention";
+import { activeMcpConsent, mcpAnalyticsId, withMcpConsent } from "@/lib/privacy/mcp-consent";
+import { requestSignal, runWithRequestSignal, waitForSignal } from "@/lib/request-lifecycle";
+
+type CallMetric = {
+  tool: string;
+  durationMs: number;
+  failed: boolean;
+  timestamp: Date;
+};
+type Runtime = {
+  enabled?: string;
+  key?: string;
+  host?: string;
+  release?: string;
+  waitUntil?: (task: Promise<void>) => void;
+};
+type Backend = {
+  consent: typeof activeMcpConsent;
+  withConsent: typeof withMcpConsent;
+  send: typeof sendMcpMetric;
+  prepareUnlinked: typeof queueMcpMonitoringErasure;
+};
+
+export async function sendMcpMetric(id: string | undefined, metric: CallMetric, runtime: Runtime) {
+  if (runtime.enabled !== "1" || !runtime.key || !runtime.host) return;
+  const distinctId = id ? mcpAnalyticsId(id) : mcpMonitoringId(metric.timestamp);
+  // Minute precision is sufficient for service reliability and limits correlation.
+  const timestamp = id
+    ? metric.timestamp
+    : new Date(Math.floor(metric.timestamp.getTime() / 60000) * 60000);
+  // Manual SDK capture deliberately never receives arguments, results, request
+  // headers, OAuth identifiers or errors. No prepareTool* calls alter MCP schemas.
+  const client = new PostHogMCP(runtime.key, {
+    host: runtime.host,
+    captureModel: false,
+    enableConversationId: false,
+    enableExceptionAutocapture: false,
+    disableGeoip: true,
+    flushAt: 20,
+    flushInterval: 0,
+    fetchRetryCount: 0,
+    requestTimeout: 1500,
+    before_send: (event) => {
+      // Reject exception fan-out and rebuild the entire envelope. SDK updates
+      // cannot quietly introduce content, profiles or cross-session identifiers.
+      if (event?.event !== "$mcp_tool_call") return null;
+      return {
+        event: "$mcp_tool_call",
+        distinctId,
+        timestamp,
+        properties: {
+          $mcp_account_linked: Boolean(id),
+          $mcp_source: "posthog_mcp_analytics",
+          $mcp_server_name: "Tidy canvas",
+          $mcp_method: "tools/call",
+          $mcp_tool_name: metric.tool,
+          $mcp_resource_name: metric.tool,
+          $mcp_duration_ms: metric.durationMs,
+          $mcp_is_error: metric.failed,
+          ...(metric.failed ? { $mcp_error_type: "tool_error" } : {}),
+          $process_person_profile: false,
+          $geoip_disable: true,
+          ...(runtime.release && /^[a-zA-Z0-9._-]{1,100}$/.test(runtime.release)
+            ? { $app_version: runtime.release }
+            : {}),
+        },
+      };
+    },
+  });
+  client.on("error", () => console.warn(JSON.stringify({ event: "mcp_analytics_unavailable" })));
+  try {
+    client.captureToolCall({
+      distinctId,
+      toolName: metric.tool,
+      durationMs: metric.durationMs,
+      isError: metric.failed,
+      timestamp,
+    });
+  } finally {
+    await client.shutdown(2000);
+  }
+}
+
+function analyticsRuntime(): Runtime {
+  let runtime: Runtime = {};
+  try {
+    const { env, ctx } = getCloudflareContext();
+    runtime = {
+      enabled: (env as CloudflareEnv & { POSTHOG_MCP_ANALYTICS_ENABLED?: string })
+        .POSTHOG_MCP_ANALYTICS_ENABLED,
+      waitUntil: (task) => ctx.waitUntil(task),
+    };
+  } catch {
+    /* Local Next.js runtime. */
+  }
+  return {
+    ...runtime,
+    enabled: runtime.enabled ?? process.env.POSTHOG_MCP_ANALYTICS_ENABLED,
+    key: process.env.NEXT_PUBLIC_POSTHOG_KEY,
+    host: process.env.NEXT_PUBLIC_POSTHOG_HOST,
+    release: process.env.NEXT_PUBLIC_APP_VERSION,
+  };
+}
+
+export function instrumentMcpAnalytics(
+  server: McpServer,
+  userId: string,
+  runtime = analyticsRuntime(),
+  backend: Backend = {
+    consent: activeMcpConsent,
+    withConsent: withMcpConsent,
+    send: sendMcpMetric,
+    prepareUnlinked: queueMcpMonitoringErasure,
+  },
+) {
+  if (
+    runtime.enabled !== "1" ||
+    !runtime.key ||
+    !runtime.host ||
+    (process.env.NODE_ENV === "test" && backend.send === sendMcpMetric)
+  )
+    return server;
+  type Handler = (...args: unknown[]) => Promise<unknown>;
+  type Register = (name: string, config: unknown, callback: Handler) => unknown;
+  const register = server.registerTool.bind(server) as Register;
+  server.registerTool = ((tool: string, config: unknown, callback: Handler) =>
+    register(tool, config, async (...args) => {
+      // Registration supplies the name, never arbitrary client input.
+      // Optional account linking must not inherit the pool's 10-second connect/query
+      // deadlines. Abort the actual lookup (and release its socket), not just a
+      // timer race, while preserving cancellation from the MCP request.
+      const parentSignal = requestSignal();
+      const lookupSignal = AbortSignal.any([
+        AbortSignal.timeout(500),
+        ...(parentSignal ? [parentSignal] : []),
+      ]);
+      const consent = await waitForSignal(
+        runWithRequestSignal(lookupSignal, () => backend.consent(userId)),
+        lookupSignal,
+      ).catch(() => undefined);
+      const started = performance.now();
+      const timestamp = new Date();
+      let failed = true;
+      try {
+        const result = await callback(...args);
+        failed = Boolean(
+          result && typeof result === "object" && "isError" in result && result.isError,
+        );
+        return result;
+      } finally {
+        const metric = {
+          tool,
+          timestamp,
+          failed,
+          durationMs: Math.max(0, Math.round(performance.now() - started)),
+        };
+        const task = Promise.resolve()
+          .then(() =>
+            // A disconnected MCP client must not release the database consent
+            // lock while a bounded outbound send is still running in waitUntil.
+            runWithRequestSignal(new AbortController().signal, async () => {
+              let attempted = false;
+              if (consent) {
+                try {
+                  await backend.withConsent(userId, consent, async () => {
+                    attempted = true;
+                    await backend.send(consent, metric, runtime);
+                  });
+                } catch {
+                  // Fall back only before delivery starts; retries could double-count.
+                }
+              }
+              if (!attempted) {
+                // No account identifier enters this path, including the retention job.
+                await backend.prepareUnlinked(metric.timestamp);
+                await backend.send(undefined, metric, runtime);
+              }
+            }),
+          )
+          .catch(() => {
+            /* Monitoring must never fail the tool. */
+          });
+        if (runtime.waitUntil) {
+          try {
+            runtime.waitUntil(task);
+          } catch {
+            // A scheduler failure must not replace the original tool result.
+            await task;
+          }
+        } else await task;
+      }
+    })) as McpServer["registerTool"];
+  return server;
+}
