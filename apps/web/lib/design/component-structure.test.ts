@@ -13,8 +13,16 @@ import {
   reparentLayer,
 } from "./document-operations";
 import { editLayers, trackDocumentChanges } from "./edit-document";
+import { editorErrorInstance, editorErrorNotice } from "./editor-error";
+import { ComponentStructureError } from "./component-structure-error";
 import { reconcileComponentStructure } from "./component-structure";
-import { resetInstance, detachInstance, swapInstance } from "./component-instance";
+import {
+  componentInstanceSources,
+  owningInstance,
+  resetInstance,
+  detachInstance,
+  swapInstance,
+} from "./component-instance";
 import { diffDocument, applyDocumentPatch, invertPatch } from "./document-patch";
 import { resolveVariantNodes, standaloneVariants } from "./component-variants";
 import { mergeImport } from "./merge-import";
@@ -366,4 +374,130 @@ test("master structure edits remain usable in imported documents over 5000 layer
   expect(after.nodes).toHaveLength(6002);
   expect(copyOf(after, "imported-child").parentId).toBe("copy-0");
   expect(applyDocumentPatch(after, invertPatch(diffDocument(before, after)), true)).toEqual(before);
+});
+
+test("instance controls resolve the selected child's own copy, not another copy or the master", () => {
+  const before = fixture();
+  let id = 0;
+  const document = createComponentInstance(before, "master", () => `second-${id++}`).document;
+  expect(owningInstance(document.nodes, "copy-1")?.id).toBe("copy-0");
+  expect(owningInstance(document.nodes, "second-1")?.id).toBe("second-0");
+  expect(owningInstance(document.nodes, "copy-0")?.id).toBe("copy-0");
+  expect(owningInstance(document.nodes, "label")).toBeUndefined();
+  expect(owningInstance(document.nodes, "missing")).toBeUndefined();
+  const detached = detachInstance(document, "copy-0");
+  expect(owningInstance(detached.nodes, "copy-1")).toBeUndefined();
+});
+
+test("linked text can be cleared; explicit detach enables deletion and both actions undo", () => {
+  const before = fixture();
+  const cleared = commit(before, editLayers(before, ["copy-1"], { text: "" }));
+  expect(cleared.nodes.find((node) => node.id === "copy-1")?.text).toBe("");
+  expect(cleared.nodes.find((node) => node.id === "label")?.text).toBe("Original");
+  const owner = owningInstance(cleared.nodes, "copy-1")!;
+  const detached = commit(cleared, detachInstance(cleared, owner.id));
+  const deleted = commit(detached, removeLayers(detached, ["copy-1"]));
+  expect(deleted.nodes.some((node) => node.id === "copy-1")).toBe(false);
+  expect(deleted.nodes.find((node) => node.id === "label")?.text).toBe("Original");
+  const restored = applyDocumentPatch(deleted, invertPatch(diffDocument(detached, deleted)), true);
+  expect(restored).toEqual(detached);
+  expect(applyDocumentPatch(restored, invertPatch(diffDocument(cleared, detached)), true)).toEqual(
+    cleared,
+  );
+});
+
+test("structure warnings retain the blocked instance and reject stale detach targets", () => {
+  const before = fixture();
+  let id = 0;
+  const document = createComponentInstance(before, "master", () => `second-${id++}`).document;
+  let failure: unknown;
+  try {
+    commit(document, removeLayers(document, ["second-1"]));
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(ComponentStructureError);
+  const notice = editorErrorNotice(failure, "Could not change layers.");
+  expect(notice.detach).toEqual({ instanceId: "second-0", componentId: "master" });
+  expect(editorErrorInstance(document, notice)?.id).toBe("second-0");
+  const detached = commit(
+    document,
+    detachInstance(document, editorErrorInstance(document, notice)!.id),
+  );
+  expect(detached.nodes.find((node) => node.id === "copy-0")?.instanceOf).toBe("master");
+  expect(editorErrorInstance(detached, notice)).toBeUndefined();
+  expect(editorErrorInstance(removeLayers(document, ["second-0"]), notice)).toBeUndefined();
+  const locked = {
+    ...document,
+    nodes: document.nodes.map((node) =>
+      node.id === "second-0" ? { ...node, locked: true } : node,
+    ),
+  };
+  expect(editorErrorInstance(locked, notice)).toBeUndefined();
+  const swapped = {
+    ...document,
+    nodes: document.nodes.map((node) =>
+      node.id === "second-0"
+        ? { ...node, instanceOf: "other-component", componentSourceId: "other-component" }
+        : node,
+    ),
+  };
+  expect(editorErrorInstance(swapped, notice)).toBeUndefined();
+  expect(
+    editorErrorInstance(document, editorErrorNotice(new Error("Other error"), "Failed")),
+  ).toBeUndefined();
+});
+
+test("component choices exclude owning ancestors and include unrelated sources on other pages", () => {
+  const document = fixture();
+  const nodes = [
+    { ...layer("ancestor"), isComponent: true },
+    ...document.nodes.map((node) =>
+      node.id === "copy-0" ? { ...node, parentId: "ancestor" } : node,
+    ),
+    { ...layer("remote-source"), isComponent: true, pageId: "page-2" },
+  ];
+  expect(componentInstanceSources(nodes, "copy-0").map((node) => node.id)).toEqual([
+    "master",
+    "remote-source",
+  ]);
+  const moved = nodes.map((node) => (node.id === "copy-0" ? { ...node, parentId: null } : node));
+  expect(componentInstanceSources(moved, "copy-0").map((node) => node.id)).toEqual([
+    "ancestor",
+    "master",
+    "remote-source",
+  ]);
+  expect(owningInstance(moved, "copy-1")?.id).toBe("copy-0");
+  const detached = moved.map((node) =>
+    node.id.startsWith("copy-")
+      ? { ...node, instanceOf: undefined, componentSourceId: undefined }
+      : node,
+  );
+  expect(owningInstance(detached, "copy-1")).toBeUndefined();
+});
+
+test("instance recovery respects ancestor locks and rejects stale metadata", () => {
+  const document = fixture();
+  const notice = editorErrorNotice(
+    new ComponentStructureError("Detach", "copy-0", "master"),
+    "Failed",
+  );
+  const locked = {
+    ...document,
+    nodes: [
+      { ...layer("locked-parent"), locked: true },
+      ...document.nodes.map((node) =>
+        node.id === "copy-0" ? { ...node, parentId: "locked-parent" } : node,
+      ),
+    ],
+  };
+  expect(editorErrorInstance(locked, notice)).toBeUndefined();
+  expect(() => detachInstance(locked, "copy-0")).toThrow("unlocked");
+  const altered = {
+    ...document,
+    nodes: document.nodes.map((node) =>
+      node.id === "copy-0" ? { ...node, componentSourceId: "label" } : node,
+    ),
+  };
+  expect(editorErrorInstance(altered, notice)).toBeUndefined();
 });

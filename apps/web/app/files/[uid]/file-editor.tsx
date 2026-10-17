@@ -1,7 +1,14 @@
 "use client";
 import { isFigmaClipboard } from "@bella/design/figma-input";
 import { readFigma, remapFigmaAssets } from "@/lib/design/figma-client";
-import { editorErrorMessage } from "@/lib/design/editor-error";
+import {
+  editorErrorMessage,
+  editorErrorNotice,
+  editorErrorInstance,
+  type EditorErrorNotice,
+} from "@/lib/design/editor-error";
+import { detachInstance, owningInstance } from "@/lib/design/component-instance";
+import { EditorNotification } from "./editor-notification";
 import { ImageEditor } from "./image-editor";
 import {
   applyRasterTrace,
@@ -81,7 +88,7 @@ const EditorThumbnail = dynamic(
 );
 import type { Review } from "@/lib/github/reviews";
 import { CanvasComments, type CanvasCommentsHandle } from "./canvas-comments";
-import { LayerContextMenu, layerMenuPosition, type LayerMenuItem } from "./layer-context-menu";
+import { LayerContextMenu, type LayerMenuItem } from "./layer-context-menu";
 import { renameDesignFile } from "../actions";
 import { useFileRoom } from "./use-file-room";
 import { CollaboratorOverlay } from "./collaborator-overlay";
@@ -396,7 +403,13 @@ export function FileEditor({
   const [marquee, setMarquee] = useState<Marquee | null>(null);
   const [snapGuides, setSnapGuides] = useState<SnapGuide[]>([]);
   const [spacingCues, setSpacingCues] = useState<SpacingCue[]>([]);
-  const [error, setError] = useState("");
+  const [notificationRoot, setNotificationRoot] = useState<HTMLDivElement | null>(null);
+  const [errorNotice, setErrorNotice] = useState<EditorErrorNotice>({ message: "" });
+  const error = errorNotice.message;
+  const setError = useCallback((message: string) => setErrorNotice({ message }), []);
+  const reportError = useCallback((cause: unknown, fallback: string) => {
+    setErrorNotice(editorErrorNotice(cause, fallback));
+  }, []);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [prototypeMode, setPrototypeMode] = useState(false);
@@ -614,6 +627,7 @@ export function FileEditor({
     event.preventDefault();
     setError(PENDING_NAVIGATION_MESSAGE);
   };
+  const errorInstance = !readOnly ? editorErrorInstance(snapshot.content, errorNotice) : undefined;
   const visibleError = error === PENDING_NAVIGATION_MESSAGE && !room.hasPendingEdits() ? "" : error;
   const pages = useMemo(() => documentPages(snapshot.content), [snapshot.content]);
   const currentPageId = pages.some((page) => page.id === activePageId) ? activePageId : pages[0].id;
@@ -1033,7 +1047,7 @@ export function FileEditor({
       );
       patch = diffDocument(before.content, content);
     } catch (cause) {
-      setError(editorErrorMessage(cause, "Could not change layers."));
+      reportError(cause, "Could not change layers.");
       return;
     }
     if (!patch.length) {
@@ -1066,7 +1080,7 @@ export function FileEditor({
       });
       await committed;
     } catch (cause) {
-      setError(editorErrorMessage(cause, "Could not change layers."));
+      reportError(cause, "Could not change layers.");
     } finally {
       pendingCountRef.current--;
       busyRef.current = pendingCountRef.current > 0;
@@ -1175,7 +1189,7 @@ export function FileEditor({
     try {
       if (!captured) validatePlacementTarget(room.getSnapshot().content, target);
     } catch (cause) {
-      setError(editorErrorMessage(cause, "Invalid destination."));
+      reportError(cause, "Invalid destination.");
       return;
     }
     const version = selectionVersion.current;
@@ -1213,7 +1227,7 @@ export function FileEditor({
       if (assets.length) await completeAssets(assets, target, version, captured);
       if (failures.length) setError(failures.join(" "));
     } catch (cause) {
-      setError(editorErrorMessage(cause, "Could not place images."));
+      reportError(cause, "Could not place images.");
     } finally {
       uploadInProgress.current = false;
       setUploading(false);
@@ -1237,7 +1251,7 @@ export function FileEditor({
         version,
       );
     } catch (cause) {
-      setError(editorErrorMessage(cause, "Could not place asset."));
+      reportError(cause, "Could not place asset.");
     } finally {
       uploadInProgress.current = false;
       setUploading(false);
@@ -1337,7 +1351,7 @@ export function FileEditor({
       );
       void loadAssets();
     } catch (cause) {
-      setError(editorErrorMessage(cause, "Could not upload fill image."));
+      reportError(cause, "Could not upload fill image.");
     }
   }
 
@@ -1391,7 +1405,7 @@ export function FileEditor({
     } catch (error) {
       if (version === nameVersionRef.current) {
         setName(previous);
-        setError(editorErrorMessage(error, "Could not rename the file."));
+        reportError(error, "Could not rename the file.");
       }
     } finally {
       if (version === nameVersionRef.current) nameSavingRef.current = false;
@@ -1506,7 +1520,7 @@ export function FileEditor({
     try {
       await action.committed;
     } catch (cause) {
-      setError(editorErrorMessage(cause, "Could not undo this edit."));
+      reportError(cause, "Could not undo this edit.");
     } finally {
       pendingCountRef.current--;
       busyRef.current = pendingCountRef.current > 0;
@@ -1840,7 +1854,7 @@ export function FileEditor({
       );
       void changeDocument(() => wrapped.document, wrapped.id);
     } catch (cause) {
-      setError(editorErrorMessage(cause, "Could not wrap layers."));
+      reportError(cause, "Could not wrap layers.");
     }
   }
 
@@ -2039,7 +2053,7 @@ export function FileEditor({
       }
       if (!signal?.aborted) await commitClipboard(payload, context, inPlace);
     } catch (cause) {
-      if (!signal?.aborted) setError(editorErrorMessage(cause, "Could not paste layers."));
+      if (!signal?.aborted) reportError(cause, "Could not paste layers.");
     }
   }
 
@@ -2119,7 +2133,7 @@ export function FileEditor({
       if (!signal?.aborted)
         await commitClipboard(payload, context, inPlace, result.document.warnings, dependencies);
     } catch (cause) {
-      if (!signal?.aborted) setError(editorErrorMessage(cause, "Could not paste Figma layers."));
+      if (!signal?.aborted) reportError(cause, "Could not paste Figma layers.");
     }
   }
 
@@ -2182,7 +2196,7 @@ export function FileEditor({
         if (event.type === "cut")
           void changeDocument((content) => removeLayers(content, selectedIds), null);
       } catch (cause) {
-        setError(editorErrorMessage(cause, "Could not copy layers."));
+        reportError(cause, "Could not copy layers.");
       }
     }
     function paste(event: ClipboardEvent) {
@@ -2256,30 +2270,15 @@ export function FileEditor({
       const seen = new Set([nodeId]);
       for (const element of document.elementsFromPoint(event.clientX, event.clientY)) {
         const id = element.closest("[data-node-id]")?.getAttribute("data-node-id");
-        if (id && !seen.has(id) && nodes.some((node) => node.id === id)) {
+        if (id && !seen.has(id) && nodesById.has(id)) {
           seen.add(id);
           behindIds.push(id);
         }
       }
     }
-    const node = nodes.find((item) => item.id === nodeId);
-    const selectionCount = selectedIds.includes(nodeId) ? selectedIds.length : 1;
-    const itemCount =
-      9 +
-      Number(node?.type !== "artboard") +
-      Number(node?.type === "container") +
-      Number(Boolean(node && !node.isComponent && !node.instanceOf && node.type !== "artboard")) +
-      Number(Boolean(node?.isComponent)) +
-      Number(
-        selectionCount === 1 &&
-          Boolean(
-            node &&
-            ["artboard", "container"].includes(node.type) &&
-            nodes.some((child) => child.parentId === node.id && child.visible),
-          ),
-      );
     setContextMenu({
-      ...layerMenuPosition(event.clientX, event.clientY, itemCount + behindIds.length),
+      x: event.clientX,
+      y: event.clientY,
       nodeId,
       behindIds,
     });
@@ -3321,6 +3320,9 @@ export function FileEditor({
   );
 
   const contextNode = contextMenu ? nodes.find((node) => node.id === contextMenu.nodeId) : null;
+  const contextInstance = contextNode
+    ? owningInstance(snapshot.content.nodes, contextNode.id)
+    : undefined;
   const contextItems: LayerMenuItem[] = contextNode
     ? [
         ...contextMenu!.behindIds.map((id, index) => ({
@@ -3436,6 +3438,31 @@ export function FileEditor({
                     (content) => makeComponent(content, contextNode.id),
                     contextNode.id,
                   ),
+              },
+            ]
+          : []),
+        ...(contextInstance
+          ? [
+              {
+                label: "Detach instance",
+                replayLabel: true,
+                disabled:
+                  readOnly ||
+                  isLayerLocked(nodes, contextNode.id) ||
+                  isLayerLocked(nodes, contextInstance.id),
+                onSelect: () => {
+                  void changeDocument((content) => {
+                    const instance = owningInstance(content.nodes, contextNode.id);
+                    if (
+                      instance?.id !== contextInstance.id ||
+                      instance.instanceOf !== contextInstance.instanceOf ||
+                      isLayerLocked(content.nodes, contextNode.id)
+                    )
+                      return content;
+                    return detachInstance(content, instance.id);
+                  });
+                  viewport.current?.focus({ preventScroll: true });
+                },
               },
             ]
           : []),
@@ -3833,7 +3860,8 @@ export function FileEditor({
                             if (readOnly) return;
                             event.preventDefault();
                             setPageMenu({
-                              ...layerMenuPosition(event.clientX, event.clientY, 5),
+                              x: event.clientX,
+                              y: event.clientY,
                               pageId: page.id,
                             });
                           }}
@@ -3851,7 +3879,8 @@ export function FileEditor({
                           title="Page options"
                           onClick={(event) =>
                             setPageMenu({
-                              ...layerMenuPosition(event.clientX, event.clientY, 5),
+                              x: event.clientX,
+                              y: event.clientY,
                               pageId: page.id,
                             })
                           }
@@ -4028,6 +4057,7 @@ export function FileEditor({
             <div hidden={!viewPreferences.comments}>
               <CanvasComments
                 ref={commentsRef}
+                notificationRoot={viewPreferences.comments ? notificationRoot : null}
                 fileId={fileId}
                 pageId={currentPageId}
                 view={view}
@@ -4176,7 +4206,7 @@ export function FileEditor({
                       ),
                     });
                   } catch (cause) {
-                    setError(editorErrorMessage(cause, "Could not scale layers."));
+                    reportError(cause, "Could not scale layers.");
                   }
                 }}
                 onScaleCommit={(factor) => {
@@ -4208,7 +4238,7 @@ export function FileEditor({
                       ),
                     });
                   } catch (cause) {
-                    setError(editorErrorMessage(cause, "Could not resize layers."));
+                    reportError(cause, "Could not resize layers.");
                   }
                 }}
                 onResizeCommit={(handle, delta, centered, aspect) => {
@@ -4221,7 +4251,7 @@ export function FileEditor({
                       resizeSelectedLayers(content, gesture.ids, target, gesture.boxes),
                     );
                   } catch (cause) {
-                    setError(editorErrorMessage(cause, "Could not resize layers."));
+                    reportError(cause, "Could not resize layers.");
                     room.restore();
                   }
                 }}
@@ -4292,7 +4322,7 @@ export function FileEditor({
                     });
                   } catch (cause) {
                     room.restore();
-                    setError(editorErrorMessage(cause, "Could not preview this point edit."));
+                    reportError(cause, "Could not preview this point edit.");
                   }
                 }}
                 onCommit={(contours) => {
@@ -4584,14 +4614,40 @@ export function FileEditor({
               />
             </div>
           )}
-          {(visibleError || exportError) && (
-            <div
-              role="alert"
-              className="absolute bottom-4 left-4 z-30 max-w-xs rounded-lg bg-surface p-3 text-xs shadow-sm"
-            >
-              {visibleError || exportError}
-            </div>
-          )}
+          <div className="pointer-events-none absolute bottom-4 right-4 z-30 flex max-h-[calc(100%-2rem)] w-80 max-w-[calc(100%-2rem)] flex-col gap-2 overflow-y-auto">
+            <div ref={setNotificationRoot} className="contents" />
+            {(visibleError || exportError) && (
+              <EditorNotification
+                message={
+                  visibleError && errorInstance
+                    ? `“${errorInstance.name}” is a component instance. Detach it to change its layers. It will stop receiving component updates.`
+                    : visibleError || exportError
+                }
+                onDismiss={() => {
+                  setError("");
+                  setExportError("");
+                  viewport.current?.focus({ preventScroll: true });
+                }}
+              >
+                {visibleError && errorInstance && (
+                  <button
+                    data-ph-public
+                    type="button"
+                    className="mt-2 rounded-md border border-primary-grey/70 px-2 py-1.5 text-xs hover:bg-primary-grey/20 focus-visible:outline-2 focus-visible:outline-primary-orange"
+                    onClick={() => {
+                      void changeDocument((content) => {
+                        const instance = editorErrorInstance(content, errorNotice);
+                        return instance ? detachInstance(content, instance.id) : content;
+                      });
+                      viewport.current?.focus({ preventScroll: true });
+                    }}
+                  >
+                    Detach instance
+                  </button>
+                )}
+              </EditorNotification>
+            )}
+          </div>
         </div>
       </div>
       {editedImage && imageTarget && (

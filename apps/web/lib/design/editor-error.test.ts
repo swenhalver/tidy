@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { z } from "zod";
-import { editorErrorMessage } from "./editor-error";
+import { editorErrorMessage, editorErrorNotice } from "./editor-error";
 
 test("validation details do not appear in editor errors, including serialized server issues", () => {
   const result = z
@@ -28,4 +28,38 @@ test("useful edit conflict and permission errors retain their messages", () => {
   ]) {
     expect(editorErrorMessage(new Error(message), "Could not change layers.")).toBe(message);
   }
+});
+
+test("instance structure restrictions explain where to find the recovery control", () => {
+  for (const action of [
+    "adding or reparenting",
+    "deleting or moving",
+    "reparenting",
+    "reordering",
+  ]) {
+    const message = editorErrorMessage(
+      new Error(`Detach the instance before ${action} its children.`),
+      "Could not change layers.",
+    );
+    expect(message).toContain("component instance");
+    expect(message).toContain("Detach instance in the Component section");
+  }
+});
+
+test("server error text and forged names cannot create a detach action", () => {
+  const message = "Detach the instance before deleting or moving its children.";
+  expect(editorErrorNotice(new Error(message), "Failed").detach).toBeUndefined();
+  expect(
+    editorErrorNotice(
+      Object.assign(new Error(message), {
+        name: "ComponentStructureError",
+        instanceId: "other-instance",
+        componentId: "master",
+      }),
+      "Failed",
+    ).detach,
+  ).toBeUndefined();
+  expect(
+    editorErrorNotice({ message, instanceId: "other-instance", componentId: "master" }, "Failed"),
+  ).toEqual({ message: "Failed" });
 });
