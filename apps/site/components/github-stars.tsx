@@ -3,9 +3,13 @@
 import { useEffect, useState } from "react";
 
 const refreshInterval = 5 * 60 * 1000;
+// Keep the last result across client-side page navigation, including failed refreshes.
+const starCache = new Map<string, { stars: number; refreshedAt: number }>();
 
 export function GitHubStars({ repositoryUrl }: { repositoryUrl: string }) {
-  const [stars, setStars] = useState<number | null>(null);
+  const [stars, setStars] = useState<number | null>(
+    () => starCache.get(repositoryUrl)?.stars ?? null,
+  );
 
   useEffect(() => {
     const repository = repositoryUrl.match(/^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)\/?$/i);
@@ -13,10 +17,35 @@ export function GitHubStars({ repositoryUrl }: { repositoryUrl: string }) {
 
     const [, owner, name] = repository;
     const controller = new AbortController();
+    let requestInFlight = false;
+    let lastSuccessfulRefresh = starCache.get(repositoryUrl)?.refreshedAt ?? null;
+    let refreshTimeout: number | undefined;
+
+    function scheduleRefresh() {
+      window.clearTimeout(refreshTimeout);
+      if (controller.signal.aborted) return;
+
+      const remainingFreshTime =
+        lastSuccessfulRefresh === null
+          ? refreshInterval
+          : refreshInterval - (Date.now() - lastSuccessfulRefresh);
+      refreshTimeout = window.setTimeout(
+        refreshStars,
+        remainingFreshTime > 0 ? remainingFreshTime : refreshInterval,
+      );
+    }
 
     async function refreshStars() {
-      if (document.visibilityState === "hidden") return;
+      if (controller.signal.aborted || requestInFlight) return;
+      if (
+        document.visibilityState === "hidden" ||
+        (lastSuccessfulRefresh !== null && Date.now() - lastSuccessfulRefresh < refreshInterval)
+      ) {
+        scheduleRefresh();
+        return;
+      }
 
+      requestInFlight = true;
       try {
         const response = await fetch(
           `https://api.github.com/repos/${owner}/${name.replace(/\.git$/, "")}`,
@@ -33,18 +62,29 @@ export function GitHubStars({ repositoryUrl }: { repositoryUrl: string }) {
           Number.isSafeInteger(data?.stargazers_count) &&
           data.stargazers_count >= 0
         ) {
+          lastSuccessfulRefresh = Date.now();
+          starCache.set(repositoryUrl, {
+            stars: data.stargazers_count,
+            refreshedAt: lastSuccessfulRefresh,
+          });
           setStars(data.stargazers_count);
         }
       } catch {
         // Keep the link and any last known count usable if GitHub is unavailable.
+      } finally {
+        requestInFlight = false;
+        scheduleRefresh();
       }
     }
 
     void refreshStars();
-    const interval = window.setInterval(refreshStars, refreshInterval);
+    document.addEventListener("visibilitychange", refreshStars);
+    window.addEventListener("online", refreshStars);
     return () => {
       controller.abort();
-      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshStars);
+      window.removeEventListener("online", refreshStars);
+      window.clearTimeout(refreshTimeout);
     };
   }, [repositoryUrl]);
 
