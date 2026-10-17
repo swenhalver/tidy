@@ -31,7 +31,11 @@ rejects unreviewed schema drift. Production role changes require explicit approv
 Verify grants using the runtime login: application reads and intended writes
 should work; protected catalog writes, DDL and TRUNCATE should fail. Tenant
 authorization remains in application services; these grants do not isolate tenant
-rows. Recheck the manifest when adding tables or sequences. Runtime needs explicit
+rows. Recheck the manifest when adding tables or sequences. The operation also sets runtime defaults of 8 seconds per statement, 3 seconds
+waiting for locks, and 30 seconds idle in a transaction. Review those values against
+legitimate workload latency before production approval; reconnect pooled origin
+sessions and verify the settings through Hyperdrive after applying them. Operator
+connections keep their own settings. Runtime needs explicit
 grants for new objects, including the file-history sequence. Keep migration
 credentials out of app bindings and native agent environments. Run
 `bun run test:runtime:db` for the disposable restricted-login suite.
@@ -71,3 +75,37 @@ Apply it before deploying the app changes and reapply the runtime grant manifest
 Both local setup scripts include it. Run `bun test:privacy:db` to verify consent,
 expiry, withdrawal and deletion with a disposable database. Production migration
 and deployment require separate approval. See [MCP analytics](../docs/mcp-analytics.md).
+
+## File history capacity
+
+`20261017-file-history-capacity.sql` follows the file-version and account-privacy
+migrations. Apply it and the updated runtime-grant manifest before deploying the
+history capacity changes. It backfills logical-byte and version-count accounting
+without deleting existing versions. Each file is limited to 200 versions and
+128 MB; each workspace to 1 GB of historical document JSON including per-row
+allowance. These are safety limits, independent of the R2 storage plan.
+
+Schedule this migration for a low-traffic maintenance window after measuring its
+duration on a production-sized copy. The stored generated column rewrites
+`designFileVersion`; the backfill, constraint scan and index builds hold an
+`ACCESS EXCLUSIVE` lock until commit. History reads and inserts wait, including
+automatic checkpoints during document edits. Requests can fail when their lock
+timeout expires. If the measured interruption is too long, prepare a separate
+staged migration with batched backfill and concurrent index creation; the stored
+generated column still requires a rewrite.
+
+Admissions replace the oldest automatic and pre-restore checkpoints when needed
+for the file or workspace allowance. Named checkpoints are never pruned. The
+active restore target and its new safety checkpoint are protected until commit.
+Each admission prunes at most 200 versions and skips other files currently locked
+by an editor; it may temporarily reject a checkpoint or skip an automatic one if
+capacity cannot safely be made available. Normal document edits still continue.
+
+The migration itself preserves existing versions. Older automatic/pre-restore
+history can be replaced on subsequent writes, including in existing over-limit
+workspaces. Restore receipts and asset references follow the lifetime of their
+versions. If named checkpoints alone fill the allowance, new checkpoints and
+restores return a capacity error; increasing the allowance or explicitly removing
+named history requires a separate product/operator decision. Run
+`bun test:versions:db` and `bun test:runtime:db` using disposable local fixtures.
+Production migration requires explicit approval.

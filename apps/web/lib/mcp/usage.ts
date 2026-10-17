@@ -1,3 +1,4 @@
+import { reserveWorkspaceOperation } from "@/lib/security/operation-budget";
 import "server-only";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { db } from "@/lib/db";
@@ -41,6 +42,10 @@ export async function consumeMcpCall(userId: string, input: Record<string, unkno
     ).rows[0]?.organizationId;
   }
   if (!organizationId || (explicit !== undefined && explicit !== organizationId)) throw denied();
+  // Autocommit authority checks release their locks before the external budget
+  // call. Repeat them below while retaining the workspace transaction's locks.
+  await retainMcpTargets(db, userId, organizationId, input);
+  await reserveWorkspaceOperation("mcp-request", organizationId);
   const client = await db.connect();
   try {
     await client.query("begin");

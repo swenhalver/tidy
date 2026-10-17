@@ -323,3 +323,494 @@ integration(
     ).toBe(true);
   },
 );
+
+integration(
+  "history accounting bounds named versions and lets automatic edits continue at capacity",
+  async () => {
+    const limited = `limited-${fixture}`;
+    await client.query(
+      'insert into "designFile" ("id","organizationId","name","createdBy") values ($1,$2,\'Limited\',$3)',
+      [limited, organization, actor],
+    );
+    await client.query('insert into "designDocument" ("fileId","content") values ($1,$2::jsonb)', [
+      limited,
+      JSON.stringify(initial()),
+    ]);
+    try {
+      await client.query(
+        `insert into "designFileVersion" ("fileId","revision","content","name","kind","createdBy")
+      select d."fileId",d."revision",d."content",'Checkpoint '||n,'named',$2
+      from "designDocument" d cross join generate_series(1,200) n where d."fileId"=$1`,
+        [limited, actor],
+      );
+      await expect(versions.createFileVersion(actor, limited, "Overflow", 1)).rejects.toThrow(
+        "file_history_capacity",
+      );
+      const version = (await versions.listFileVersions(actor, limited)).versions[0];
+      await expect(
+        commands.commitDocumentPatch(
+          actor,
+          limited,
+          crypto.randomUUID(),
+          1,
+          [],
+          false,
+          undefined,
+          undefined,
+          undefined,
+          { versionId: version.id, expectedRevision: 1 },
+        ),
+      ).rejects.toThrow("file_history_capacity");
+      expect(
+        (await client.query('select "revision" from "designDocument" where "fileId"=$1', [limited]))
+          .rows[0].revision,
+      ).toBe(1);
+      await client.query(
+        'update "designFileVersion" set "createdAt"=now()-interval \'6 minutes\' where "fileId"=$1',
+        [limited],
+      );
+      await client.query('update "designDocument" set "revision"="revision"+1 where "fileId"=$1', [
+        limited,
+      ]);
+      expect(
+        (
+          await client.query('select "versions" from "fileHistoryUsage" where "fileId"=$1', [
+            limited,
+          ])
+        ).rows[0].versions,
+      ).toBe(200);
+      expect(
+        (await client.query('select "revision" from "designDocument" where "fileId"=$1', [limited]))
+          .rows[0].revision,
+      ).toBe(2);
+      await expect(
+        client.query('update "designFileVersion" set "content"=\'{}\'::jsonb where "id"=$1', [
+          version.id,
+        ]),
+      ).rejects.toThrow("immutable");
+    } finally {
+      await client.query('delete from "designFile" where "id"=$1', [limited]);
+    }
+    const totals = (
+      await client.query(
+        `select u."bytes", (select coalesce(sum(v."byteSize"),0) from "designFileVersion" v join "designFile" f on f."id"=v."fileId" where f."organizationId"=u."organizationId") as actual
+    from "organizationHistoryUsage" u where u."organizationId"=$1`,
+        [organization],
+      )
+    ).rows[0];
+    expect(totals.bytes).toBe(totals.actual);
+  },
+);
+
+integration(
+  "concurrent files roll workspace history within one byte allowance and duplicate inserts do not charge it",
+  async () => {
+    const concurrent = `concurrent-${fixture}`;
+    await client.query(
+      'insert into "designFile" ("id","organizationId","name","createdBy") values ($1,$2,\'Concurrent\',$3)',
+      [concurrent, organization, actor],
+    );
+    await client.query('insert into "designDocument" ("fileId","content") values ($1,$2::jsonb)', [
+      concurrent,
+      JSON.stringify(initial()),
+    ]);
+    try {
+      const size = Number(
+        (
+          await client.query(
+            'select max("byteSize") as bytes from "designFileVersion" where "fileId"=any($1::text[])',
+            [[file, concurrent]],
+          )
+        ).rows[0].bytes,
+      );
+      // Simulate existing history near the workspace ceiling without allocating 1 GB.
+      await client.query(
+        'update "organizationHistoryUsage" set "bytes"=1000000000-$2 where "organizationId"=$1',
+        [organization, size],
+      );
+      const current = await snapshot();
+      const results = await Promise.allSettled([
+        versions.createFileVersion(actor, file, "Racing A", current.revision),
+        versions.createFileVersion(actor, concurrent, "Racing B", 1),
+      ]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
+      const usage = Number(
+        (
+          await client.query(
+            'select "bytes" from "organizationHistoryUsage" where "organizationId"=$1',
+            [organization],
+          )
+        ).rows[0].bytes,
+      );
+      expect(usage).toBeLessThanOrEqual(1_000_000_000);
+      const accepted = results.find(
+        (r) => r.status === "fulfilled",
+      ) as PromiseFulfilledResult<string>;
+      const acceptedFile = results[0].status === "fulfilled" ? file : concurrent;
+      await client.query(
+        `insert into "designFileVersion" ("id","fileId","revision","content","kind")
+      select "id","fileId","revision","content",'automatic' from "designFileVersion" where "id"=$1 on conflict do nothing`,
+        [accepted.value],
+      );
+      expect(
+        Number(
+          (
+            await client.query(
+              'select "bytes" from "organizationHistoryUsage" where "organizationId"=$1',
+              [organization],
+            )
+          ).rows[0].bytes,
+        ),
+      ).toBe(usage);
+      expect((await versions.readFileVersion(actor, acceptedFile, accepted.value)).version.id).toBe(
+        accepted.value,
+      );
+    } finally {
+      await client.query(
+        `update "organizationHistoryUsage" u set "bytes"=(select coalesce(sum(v."byteSize"),0) from "designFileVersion" v join "designFile" f on f."id"=v."fileId" where f."organizationId"=u."organizationId") where u."organizationId"=$1`,
+        [organization],
+      );
+      await client.query('delete from "designFile" where "id"=$1', [concurrent]);
+    }
+  },
+);
+
+integration("workspace moves transfer history usage and respect destination capacity", async () => {
+  await client.query("begin");
+  try {
+    const usage = async (id: string) =>
+      Number(
+        (
+          await client.query(
+            'select coalesce((select "bytes" from "organizationHistoryUsage" where "organizationId"=$1),0) as bytes',
+            [id],
+          )
+        ).rows[0].bytes,
+      );
+    const before = await usage(organization),
+      destination = await usage(other);
+    const bytes = Number(
+      (await client.query('select "bytes" from "fileHistoryUsage" where "fileId"=$1', [file]))
+        .rows[0].bytes,
+    );
+    await client.query('update "designFile" set "organizationId"=$2 where "id"=$1', [file, other]);
+    expect(await usage(organization)).toBe(before - bytes);
+    expect(await usage(other)).toBe(destination + bytes);
+    expect(
+      (
+        await client.query(
+          'select distinct "organizationId" from "designFileVersion" where "fileId"=$1',
+          [file],
+        )
+      ).rows,
+    ).toEqual([{ organizationId: other }]);
+    await client.query('update "designFile" set "organizationId"=$2 where "id"=$1', [
+      file,
+      organization,
+    ]);
+    expect(await usage(organization)).toBe(before);
+    expect(await usage(other)).toBe(destination);
+    await client.query(
+      'update "organizationHistoryUsage" set "bytes"=1000000000 where "organizationId"=$1',
+      [other],
+    );
+    await client.query("savepoint capacity");
+    await expect(
+      client.query('update "designFile" set "organizationId"=$2 where "id"=$1', [file, other]),
+    ).rejects.toThrow("file_history_capacity");
+    await client.query("rollback to savepoint capacity");
+    expect(await usage(organization)).toBe(before);
+    expect(
+      (await client.query('select "organizationId" from "designFile" where "id"=$1', [file]))
+        .rows[0].organizationId,
+    ).toBe(organization);
+  } finally {
+    await client.query("rollback");
+  }
+});
+
+integration(
+  "per-file history bytes stop named snapshots without charging the workspace",
+  async () => {
+    await client.query("begin");
+    try {
+      const before = (
+        await client.query(
+          'select "bytes" from "organizationHistoryUsage" where "organizationId"=$1',
+          [organization],
+        )
+      ).rows[0].bytes;
+      await client.query(`update "designFileVersion" set "kind"='named' where "fileId"=$1`, [file]);
+      await client.query('update "fileHistoryUsage" set "bytes"=128000000 where "fileId"=$1', [
+        file,
+      ]);
+      await client.query("savepoint capacity");
+      await expect(
+        client.query(
+          `insert into "designFileVersion" ("fileId","revision","content","name","kind")
+      select "fileId","revision","content",'Too large','named' from "designDocument" where "fileId"=$1`,
+          [file],
+        ),
+      ).rejects.toThrow("file_history_capacity");
+      await client.query("rollback to savepoint capacity");
+      expect(
+        (
+          await client.query(
+            'select "bytes" from "organizationHistoryUsage" where "organizationId"=$1',
+            [organization],
+          )
+        ).rows[0].bytes,
+      ).toBe(before);
+    } finally {
+      await client.query("rollback");
+    }
+  },
+);
+
+integration("workspace deletion cascades history and its accounting together", async () => {
+  await client.query("begin");
+  try {
+    await client.query('delete from "organization" where "id"=$1', [organization]);
+    for (const [table, column, id] of [
+      ["organizationHistoryUsage", "organizationId", organization],
+      ["fileHistoryUsage", "fileId", file],
+      ["designFileVersion", "fileId", file],
+    ]) {
+      expect(
+        (await client.query(`select 1 from "${table}" where "${column}"=$1`, [id])).rowCount,
+      ).toBe(0);
+    }
+  } finally {
+    await client.query("rollback");
+  }
+});
+
+integration(
+  "rolling history preserves named checkpoints and both ends of an active restore",
+  async () => {
+    const rolling = `rolling-${fixture}`;
+    await client.query(
+      'insert into "designFile" ("id","organizationId","name","createdBy") values ($1,$2,\'Rolling\',$3)',
+      [rolling, organization, actor],
+    );
+    await client.query('insert into "designDocument" ("fileId","content") values ($1,$2::jsonb)', [
+      rolling,
+      JSON.stringify(initial()),
+    ]);
+    try {
+      const target = (await versions.listFileVersions(actor, rolling)).versions[0];
+      const named = await versions.createFileVersion(actor, rolling, "Keep this", 1);
+      await client.query(
+        `insert into "designFileVersion" ("fileId","revision","content","kind")
+      select "fileId","revision","content",case when n%2=0 then 'automatic' else 'beforeRestore' end
+      from "designDocument" cross join generate_series(1,198) n where "fileId"=$1`,
+        [rolling],
+      );
+      const oldestRolling = (
+        await client.query(
+          `select "id" from "designFileVersion" where "fileId"=$1 and "id"<>$2 and "kind"<>'named' order by "sequence" limit 1`,
+          [rolling, target.id],
+        )
+      ).rows[0].id;
+      await client.query(
+        'update "designFileVersion" set "createdAt"=now()-interval \'6 minutes\' where "fileId"=$1',
+        [rolling],
+      );
+      const operation = crypto.randomUUID();
+      await commands.commitDocumentPatch(
+        actor,
+        rolling,
+        operation,
+        1,
+        [],
+        false,
+        undefined,
+        undefined,
+        undefined,
+        { versionId: target.id, expectedRevision: 1 },
+      );
+      const receipt = (
+        await client.query(
+          'select "beforeVersionId" from "designFileRestore" where "fileId"=$1 and "operationId"=$2',
+          [rolling, operation],
+        )
+      ).rows[0];
+      expect(receipt).toBeTruthy();
+      for (const id of [target.id, named, receipt.beforeVersionId])
+        expect((await versions.readFileVersion(actor, rolling, id)).version.id).toBe(id);
+      expect(
+        (await client.query('select 1 from "designFileVersion" where "id"=$1', [oldestRolling]))
+          .rowCount,
+      ).toBe(0);
+      const latest = (await versions.listFileVersions(actor, rolling)).versions[0];
+      expect(latest.kind).toBe("automatic");
+      expect(latest.revision).toBe(2);
+      const usage = (
+        await client.query(
+          `select u."versions",u."bytes",count(v.*)::int as actual_count,sum(v."byteSize") as actual_bytes
+      from "fileHistoryUsage" u join "designFileVersion" v on v."fileId"=u."fileId" where u."fileId"=$1 group by u."fileId"`,
+          [rolling],
+        )
+      ).rows[0];
+      expect(usage.versions).toBe(200);
+      expect(usage.versions).toBe(usage.actual_count);
+      expect(usage.bytes).toBe(usage.actual_bytes);
+    } finally {
+      await client.query('delete from "designFile" where "id"=$1', [rolling]);
+    }
+  },
+);
+
+integration("checkpoint creation rejects unverified accounts at the service boundary", async () => {
+  await client.query('update "user" set "emailVerified"=false where "id"=$1', [actor]);
+  try {
+    const current = await snapshot();
+    const count = (
+      await client.query('select 1 from "designFileVersion" where "fileId"=$1', [file])
+    ).rowCount;
+    await expect(
+      versions.createFileVersion(actor, file, "Unverified", current.revision),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(
+      (await client.query('select 1 from "designFileVersion" where "fileId"=$1', [file])).rowCount,
+    ).toBe(count);
+  } finally {
+    await client.query('update "user" set "emailVerified"=true where "id"=$1', [actor]);
+  }
+});
+
+integration("workspace rolling skips a file locked by another editor", async () => {
+  const org = `rolling-lock-${fixture}`,
+    older = `${org}-a`,
+    newer = `${org}-b`;
+  const locker = new pg.Client({ connectionString: process.env.VERSION_SETUP_DATABASE_URL ?? url });
+  await locker.connect();
+  try {
+    await client.query(
+      'insert into "organization" ("id","name","slug","createdAt","createdByUserId") values ($1,$1,$1,now(),$2)',
+      [org, peer],
+    );
+    for (const id of [older, newer]) {
+      await client.query(
+        'insert into "designFile" ("id","organizationId","name","createdBy") values ($1,$2,$1,$3)',
+        [id, org, actor],
+      );
+      await client.query(
+        'insert into "designDocument" ("fileId","content") values ($1,$2::jsonb)',
+        [id, JSON.stringify(initial())],
+      );
+    }
+    await locker.query("begin");
+    await locker.query('select 1 from "designFile" where "id"=$1 for update', [older]);
+    await client.query("begin");
+    await client.query("set local lock_timeout='250ms'");
+    await client.query(
+      'update "organizationHistoryUsage" set "bytes"=1000000000 where "organizationId"=$1',
+      [org],
+    );
+    await client.query(
+      `insert into "designFileVersion" ("fileId","revision","content","kind","name")
+      select "fileId","revision","content",'named','Current' from "designDocument" where "fileId"=$1`,
+      [newer],
+    );
+    expect(
+      (await client.query('select 1 from "designFileVersion" where "fileId"=$1', [older])).rowCount,
+    ).toBe(1);
+    expect(
+      (await client.query('select "kind" from "designFileVersion" where "fileId"=$1', [newer]))
+        .rows,
+    ).toEqual([{ kind: "named" }]);
+  } finally {
+    await client.query("rollback");
+    await locker.query("rollback");
+    await locker.end();
+    await client.query('delete from "organization" where "id"=$1', [org]);
+  }
+});
+
+integration(
+  "edits and checkpoints recheck a workspace move after preflight admission",
+  async () => {
+    const locker = new pg.Client({
+      connectionString: process.env.VERSION_SETUP_DATABASE_URL ?? url,
+    });
+    await locker.connect();
+    const pid = (await locker.query("select pg_backend_pid() as pid")).rows[0].pid;
+    try {
+      await client.query(
+        'insert into "organization_billing" ("organizationId","stripeStatus","stripePriceId") values ($1,\'active\',\'price_multiplayer_fixture\')',
+        [other],
+      );
+      await client.query(
+        'update "member" set "role"=\'editor\' where "organizationId"=$1 and "userId"=$2',
+        [other, actor],
+      );
+      for (const kind of ["edit", "checkpoint"]) {
+        const id = `moving-${kind}-${fixture}`;
+        let pending: Promise<unknown> | undefined;
+        try {
+          await client.query(
+            'insert into "designFile" ("id","organizationId","name","createdBy") values ($1,$2,$1,$3)',
+            [id, organization, actor],
+          );
+          await client.query(
+            'insert into "designDocument" ("fileId","content") values ($1,$2::jsonb)',
+            [id, JSON.stringify(blankDesignDocument())],
+          );
+          await locker.query("begin");
+          await locker.query('select 1 from "designFile" where "id"=$1 for update', [id]);
+          pending = (
+            kind === "edit"
+              ? commands.commitDocumentPatch(actor, id, crypto.randomUUID(), 1, [], false)
+              : versions.createFileVersion(actor, id, "Checkpoint", 1)
+          ).then(
+            () => null,
+            (error: unknown) => error,
+          );
+          let blocked = false;
+          for (let i = 0; i < 100 && !blocked; i++) {
+            blocked = (
+              await client.query(
+                "select exists(select 1 from pg_stat_activity where $1=any(pg_blocking_pids(pid))) as blocked",
+                [pid],
+              )
+            ).rows[0].blocked;
+            if (!blocked) await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          expect(blocked).toBe(true);
+          await locker.query('update "designFile" set "organizationId"=$2 where "id"=$1', [
+            id,
+            other,
+          ]);
+          await locker.query("commit");
+          const result = await pending;
+          expect(result).toBeInstanceOf(Error);
+          expect((result as Error).message).toMatch(/moved|access/i);
+          expect(
+            (await client.query('select "revision" from "designDocument" where "fileId"=$1', [id]))
+              .rows[0].revision,
+          ).toBe(1);
+          expect(
+            (
+              await client.query(
+                'select 1 from "designFileVersion" where "fileId"=$1 and "kind"=\'named\'',
+                [id],
+              )
+            ).rowCount,
+          ).toBe(0);
+        } finally {
+          await locker.query("rollback");
+          await pending;
+          await client.query('delete from "designFile" where "id"=$1', [id]);
+        }
+      }
+    } finally {
+      await locker.end();
+      await client.query(
+        'update "member" set "role"=\'viewer\' where "organizationId"=$1 and "userId"=$2',
+        [other, actor],
+      );
+      await client.query('delete from "organization_billing" where "organizationId"=$1', [other]);
+    }
+  },
+);

@@ -1,11 +1,28 @@
 import { describe, expect, test } from "bun:test";
 import {
+  assertRuntimeSafety,
   configFromBindings,
+  deploymentAuthHeaders,
   resolveDeploymentConfig,
 } from "../../../scripts/deployment-config.mjs";
 import { mkdtempSync, writeFileSync, readFileSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+
+test("deployment preflight accepts token, OAuth and API-key authentication", () => {
+  for (const type of ["api_token", "oauth"])
+    expect(deploymentAuthHeaders({ type, token: "fixture-token" })).toEqual({
+      Authorization: "Bearer fixture-token",
+    });
+  expect(
+    deploymentAuthHeaders({ type: "api_key", key: "fixture-key", email: "operator@example.test" }),
+  ).toEqual({
+    "X-Auth-Key": "fixture-key",
+    "X-Auth-Email": "operator@example.test",
+  });
+  for (const credentials of [{}, { type: "api_key", key: "fixture-key" }])
+    expect(() => deploymentAuthHeaders(credentials)).toThrow("Missing valid");
+});
 
 const template = {
   name: "fixture-app",
@@ -147,4 +164,23 @@ test("fresh Cloudflare site checkout generates a private config; local deploymen
     else process.env[variable] = previousConfig;
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("runtime safety preflight requires explicit cost/routing settings and the cleanup secret", () => {
+  const settings = { workers_dev: false, preview_urls: false, limits: { cpu_ms: 10000 } };
+  const secrets = [
+    { name: "BETTER_AUTH_SECRET", type: "secret_text" },
+    { name: "PRIVACY_CLEANUP_SECRET", type: "secret_text" },
+  ];
+  expect(() => assertRuntimeSafety(settings, secrets)).not.toThrow();
+  expect(() => assertRuntimeSafety(settings, secrets.slice(0, 1))).toThrow(
+    "PRIVACY_CLEANUP_SECRET",
+  );
+  expect(() => assertRuntimeSafety({ ...settings, workers_dev: true }, secrets)).toThrow(
+    "workers_dev",
+  );
+  expect(() => assertRuntimeSafety({ ...settings, preview_urls: true }, secrets)).toThrow(
+    "preview_urls",
+  );
+  expect(() => assertRuntimeSafety({ ...settings, limits: {} }, secrets)).toThrow("CPU limit");
 });
