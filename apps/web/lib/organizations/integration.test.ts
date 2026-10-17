@@ -442,6 +442,93 @@ integration(
   },
 );
 
+integration("MCP onboarding requires a session and an organization membership", async () => {
+  const nextHeaders = await import("next/headers");
+  const requestHeaders = spyOn(nextHeaders, "headers").mockResolvedValue(new Headers());
+  try {
+    const { default: McpOnboardingPage } = await import("../../app/onboarding/mcp/page");
+    const page = () =>
+      McpOnboardingPage({
+        params: Promise.resolve({}),
+        searchParams: Promise.resolve({ organizationId: orgId }),
+      });
+    await expect(page()).rejects.toThrow("NEXT_REDIRECT");
+
+    for (const memberHeaders of [owner, invited]) {
+      requestHeaders.mockResolvedValue(memberHeaders);
+      const result = await page();
+      expect(result.props.resourceUrl).toBe(
+        new URL("/api/mcp", process.env.BETTER_AUTH_URL ?? "http://localhost:3000").toString(),
+      );
+      expect(result.props.organizationId).toBe(orgId);
+    }
+
+    const unaffiliated = await account("No workspace", "no-workspace@example.test");
+    requestHeaders.mockResolvedValue(unaffiliated.headers);
+    await expect(page()).rejects.toThrow("NEXT_REDIRECT");
+  } finally {
+    requestHeaders.mockRestore();
+  }
+});
+
+integration("MCP onboarding carries the selected authorized organization into setup", async () => {
+  const invitation = await auth.api.createInvitation({
+    headers: outsider,
+    body: { email: "owner@example.com", role: "member", organizationId: otherId },
+  });
+  await auth.api.acceptInvitation({ headers: owner, body: { invitationId: invitation.id } });
+  await auth.api.setActiveOrganization({ headers: owner, body: { organizationId: orgId } });
+
+  const nextHeaders = await import("next/headers");
+  const requestHeaders = spyOn(nextHeaders, "headers").mockResolvedValue(owner);
+  try {
+    const { default: McpOnboardingPage } = await import("../../app/onboarding/mcp/page");
+    for (const requestedId of [orgId, otherId, "not-a-membership"]) {
+      const result = await McpOnboardingPage({
+        params: Promise.resolve({}),
+        searchParams: Promise.resolve({ organizationId: requestedId }),
+      });
+      expect(result.props.organizationId).toBe(requestedId === otherId ? otherId : orgId);
+    }
+  } finally {
+    requestHeaders.mockRestore();
+  }
+});
+
+integration("MCP onboarding only defaults to localhost in development", async () => {
+  const nextHeaders = await import("next/headers");
+  const requestHeaders = spyOn(nextHeaders, "headers").mockResolvedValue(owner);
+  const environment = process.env as Record<string, string | undefined>;
+  const originalUrl = environment.BETTER_AUTH_URL;
+  const originalMode = environment.NODE_ENV;
+  try {
+    const { default: McpOnboardingPage } = await import("../../app/onboarding/mcp/page");
+    const page = () =>
+      McpOnboardingPage({
+        params: Promise.resolve({}),
+        searchParams: Promise.resolve({ organizationId: orgId }),
+      });
+    environment.NODE_ENV = "production";
+    for (const value of [undefined, ""]) {
+      if (value === undefined) delete environment.BETTER_AUTH_URL;
+      else environment.BETTER_AUTH_URL = value;
+      await expect(page()).rejects.toThrow("BETTER_AUTH_URL is required for MCP onboarding.");
+    }
+    environment.BETTER_AUTH_URL = "https://app.example.test";
+    expect((await page()).props.resourceUrl).toBe("https://app.example.test/api/mcp");
+
+    environment.NODE_ENV = "development";
+    delete environment.BETTER_AUTH_URL;
+    expect((await page()).props.resourceUrl).toBe("http://localhost:3000/api/mcp");
+  } finally {
+    if (originalUrl === undefined) delete environment.BETTER_AUTH_URL;
+    else environment.BETTER_AUTH_URL = originalUrl;
+    if (originalMode === undefined) delete environment.NODE_ENV;
+    else environment.NODE_ENV = originalMode;
+    requestHeaders.mockRestore();
+  }
+});
+
 integration("confirmed deletion frees the created-organisation allowance", async () => {
   await db.query('update "billingDeployment" set "selfHosted"=false');
   const created = await create(invited, "Temporary");
@@ -1412,6 +1499,43 @@ integration(
     const { revokeMcpAuthorization } = await import("../mcp/authorizations");
     await revokeMcpAuthorization(ownerId, "gpt-plugin");
     expect((await request(file.id)).status).toBe(401);
+  },
+);
+
+integration(
+  "agent status includes only current account grants with live MCP permission",
+  async () => {
+    const { authorizedClients } = await import("../mcp/authorizations");
+    await oauthClient("status-a");
+    await oauthClient("status-b");
+    await oauthClient("status-other-account");
+    await consent("status-a", ownerId);
+    await consent("status-b", ownerId);
+    await consent("status-other-account", invitedId);
+    const ids = async () =>
+      (await authorizedClients(ownerId, mcpResource)).map((item) => item.clientId);
+    expect(await ids()).toEqual(["status-a", "status-b"]);
+    await db.query('update "oauthClient" set "disabled"=true where "clientId"=$1', ["status-a"]);
+    expect(await ids()).toEqual(["status-b"]);
+    await db.query(
+      'update "oauthClient" set "disabled"=false, "scopes"=\'[]\' where "clientId"=$1',
+      ["status-a"],
+    );
+    expect(await ids()).toEqual(["status-b"]);
+    await db.query('update "oauthClient" set "scopes"=null where "clientId"=$1', ["status-a"]);
+    expect(await ids()).toEqual(["status-a", "status-b"]);
+    await db.query('delete from "oauthClientResource" where "clientId"=$1', ["status-a"]);
+    expect(await ids()).toEqual(["status-b"]);
+    try {
+      await db.query('update "oauthResource" set "disabled"=true where "identifier"=$1', [
+        mcpResource,
+      ]);
+      expect(await ids()).toEqual([]);
+    } finally {
+      await db.query('update "oauthResource" set "disabled"=false where "identifier"=$1', [
+        mcpResource,
+      ]);
+    }
   },
 );
 

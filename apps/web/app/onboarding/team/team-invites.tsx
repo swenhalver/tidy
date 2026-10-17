@@ -120,9 +120,9 @@ export function TeamInvites({
     }
   }
 
-  function finish() {
-    posthog.capture("onboarding_completed", { invitation_count: invites.length });
-    router.replace("/files");
+  function continueToMcp() {
+    posthog.capture("onboarding_team_completed", { invitation_count: invites.length });
+    router.replace(`/onboarding/mcp?organizationId=${encodeURIComponent(organizationId)}`);
   }
 
   return (
@@ -181,10 +181,11 @@ export function TeamInvites({
                 className="flex flex-wrap items-center justify-between gap-4 py-3 text-sm"
               >
                 <span className="min-w-0 truncate">{invite.email}</span>
-                <div className="flex shrink-0 flex-wrap items-center gap-4">
+                <div className="flex w-full min-w-0 flex-wrap items-center gap-3 sm:w-auto">
                   {canAssignRole(actorRole, invite.role ?? "") ? (
                     <SelectMenu
                       replayOptions
+                      className="max-w-full"
                       label={`Invite role for ${invite.email}`}
                       value={invite.role === "member" ? "editor" : (invite.role ?? "")}
                       disabled={Boolean(cancellingId)}
@@ -245,11 +246,11 @@ export function TeamInvites({
       {onboarding && (
         <button
           type="button"
-          onClick={finish}
+          onClick={continueToMcp}
           className="mt-8 inline-flex items-center gap-2 text-sm font-medium underline decoration-primary-orange underline-offset-4 hover:text-accent-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-black"
         >
           <span data-ph-public style={{ display: "contents" }}>
-            {invites.length ? "Continue to Tidy" : "Continue on my own"}
+            {invites.length ? "Continue" : "Continue on my own"}
           </span>
           <Icon name="arrowRight" size={18} />
         </button>
