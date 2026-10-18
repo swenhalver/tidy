@@ -144,7 +144,10 @@ export function PrototypeInspector({
                   value={active.trigger.delay}
                   numeric
                   integer
-                  validate={(value) => value !== ""}
+                  required
+                  validate={(value) =>
+                    value === "" ? "Enter a delay in milliseconds." : undefined
+                  }
                   onCommit={(value) =>
                     update((current) => ({
                       ...current,
@@ -343,7 +346,10 @@ export function PrototypeInspector({
                     value={active.transition.duration}
                     numeric
                     integer
-                    validate={(value) => value !== ""}
+                    required
+                    validate={(value) =>
+                      value === "" ? "Enter a duration in milliseconds." : undefined
+                    }
                     onCommit={(value) =>
                       update((current) => ({
                         ...current,
@@ -419,7 +425,8 @@ export function PrototypeInspector({
                 step={0.1}
                 value={node.states?.[state]?.opacity ?? node.style.opacity ?? 1}
                 numeric
-                validate={(value) => value !== ""}
+                required
+                validate={(value) => (value === "" ? "Enter an opacity from 0 to 1." : undefined)}
                 onCommit={(value) =>
                   onPatch((current) => ({
                     states: {
