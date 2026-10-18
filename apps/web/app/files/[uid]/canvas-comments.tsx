@@ -554,7 +554,7 @@ export const CanvasComments = forwardRef<
       })}
       {(pageThreads.length > 0 || nextCursor || toolbarControls) && (
         <div
-          className="absolute left-4 right-4 top-4 flex items-center justify-end gap-2"
+          className="absolute left-4 right-4 top-20 flex items-center justify-end gap-2 md:top-4"
           onPointerDown={(event) => event.stopPropagation()}
           onWheel={(event) => event.stopPropagation()}
         >

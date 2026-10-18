@@ -75,6 +75,7 @@ import { Icon } from "@/components/ui/icon";
 import { ComponentLibraryPanel } from "./component-library-panel";
 import { SelectMenu } from "@/components/ui/select-menu";
 import { useEditorToolbarPlacement } from "@/components/ui/editor-toolbar-preference";
+import { useMobileEditor } from "@/components/files/use-mobile-editor";
 import type { EditorToolbarPlacement } from "@/lib/editor-preferences";
 import {
   canvasToolsClass,
@@ -84,6 +85,7 @@ import {
 import { PanelToggle } from "./panel-toggle";
 import { EditorChrome, EditorPanel } from "./editor-panel";
 import { CanvasViewMenu, type CanvasPreferences } from "./canvas-view-menu";
+import { CanvasModeSwitch } from "./canvas-mode-switch";
 import { EditorHeader, type EditorUser } from "./editor-header";
 import dynamic from "next/dynamic";
 const EditorReviewControl = dynamic(() =>
@@ -350,7 +352,9 @@ export function FileEditor({
 }) {
   // Archived snapshots use the static viewer: no live room, comments or writes.
   const preview = previewMode || archived;
-  const toolbarPlacement = useEditorToolbarPlacement(initialToolbarPlacement);
+  const mobileLayout = useMobileEditor();
+  const savedToolbarPlacement = useEditorToolbarPlacement(initialToolbarPlacement);
+  const toolbarPlacement = mobileLayout ? "left" : savedToolbarPlacement;
   const [agents, setAgents] = useState<ThreadsWorkspaceProps | undefined>(() =>
     initialAgents && !("then" in initialAgents) ? initialAgents : undefined,
   );
@@ -401,7 +405,9 @@ export function FileEditor({
   const [sidebarTab, setSidebarTab] = useState<"layers" | "tokens">("layers");
   const [layerQuery, setLayerQuery] = useState("");
   const [view, setView] = useState<View>({ zoom: 1, x: 0, y: 0 });
-  const [panelsOpen, setPanelsOpen] = useState(initialPanelsOpen);
+  const [desktopPanelsOpen, setPanelsOpen] = useState(initialPanelsOpen);
+  const [mobilePanelsOpen, setMobilePanelsOpen] = useState(false);
+  const panelsOpen = mobileLayout ? mobilePanelsOpen : desktopPanelsOpen;
   const [inspectorDismissed, setInspectorDismissed] = useState(false);
   const [tool, setTool] = useState<CanvasTool>("select");
   const [spaceHeld, setSpaceHeld] = useState(false);
@@ -742,6 +748,7 @@ export function FileEditor({
     multiScaleIds.length > 1 &&
     multiScaleIds.every((id) => nodesById.get(id)?.parentId === multiScaleParent);
   const inspectorOpen =
+    !(mobileLayout && mobilePanelsOpen) &&
     !prototypeMode &&
     selected !== null &&
     inspectorSelection.length > 0 &&
@@ -903,10 +910,12 @@ export function FileEditor({
 
   function togglePanels() {
     setInspectorDismissed(true);
-    setPanelsOpen((open) => !open);
+    if (mobileLayout) setMobilePanelsOpen((open) => !open);
+    else setPanelsOpen((open) => !open);
   }
 
   function selectNode(id: string, additive = false) {
+    if (mobileLayout) setMobilePanelsOpen(false);
     const next = additive
       ? selectedIds.includes(id)
         ? selectedIds.filter((item) => item !== id)
@@ -3133,33 +3142,6 @@ export function FileEditor({
       >
         <Icon name="select" />
       </CanvasToolButton>
-      {!permissionReadOnly && (
-        <CanvasToolButton
-          label="Inspect mode"
-          hint="Inspect · read-only handoff"
-          pressed={inspectorMode === "inspect"}
-          onClick={() => {
-            setInspectorMode((mode) => (mode === "inspect" ? "design" : "inspect"));
-            setTool("select");
-            setEditingTextId(null);
-            setCropId(null);
-            setGradientMode(null);
-          }}
-        >
-          <svg
-            data-ph-public
-            aria-hidden="true"
-            width="20"
-            height="20"
-            viewBox="0 0 20 20"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.4"
-          >
-            <path d="m6 5-4 5 4 5m8-10 4 5-4 5M12 3 8 17" />
-          </svg>
-        </CanvasToolButton>
-      )}
       <CanvasToolButton
         label="Hand tool"
         hint="Hand · H or hold Space"
@@ -3168,6 +3150,16 @@ export function FileEditor({
       >
         <Icon name="hand" />
       </CanvasToolButton>
+      {!preview && (
+        <CanvasToolButton
+          label="Comment tool"
+          hint="Comment · C, then click"
+          pressed={tool === "comment"}
+          onClick={() => setTool("comment")}
+        >
+          <Icon name="comment" />
+        </CanvasToolButton>
+      )}
       {!readOnly && (
         <CanvasToolButton
           label="Frame tool"
@@ -3281,16 +3273,6 @@ export function FileEditor({
               strokeLinejoin="round"
             />
           </svg>
-        </CanvasToolButton>
-      )}
-      {!preview && (
-        <CanvasToolButton
-          label="Comment tool"
-          hint="Comment · C, then click"
-          pressed={tool === "comment"}
-          onClick={() => setTool("comment")}
-        >
-          <Icon name="comment" />
         </CanvasToolButton>
       )}
     </div>
@@ -3543,6 +3525,24 @@ export function FileEditor({
       onZoom={zoomView}
     />
   );
+  const canvasControls = (
+    <div className="flex items-center gap-2">
+      {!permissionReadOnly && (
+        <CanvasModeSwitch
+          mode={inspectorMode}
+          onChange={(mode) => {
+            setInspectorMode(mode);
+            setTool("select");
+            setEditingTextId(null);
+            setCropId(null);
+            setGradientMode(null);
+            setVectorMode(null);
+          }}
+        />
+      )}
+      {viewMenu}
+    </div>
+  );
   const threadControl = agents && (
     <button
       data-ph-public
@@ -3697,7 +3697,10 @@ export function FileEditor({
   );
 
   return (
-    <main className="relative flex h-dvh w-full overflow-hidden bg-surface text-primary-black">
+    <main
+      data-mobile-panels-open={mobilePanelsOpen}
+      className="editor-workspace relative flex h-dvh w-full overflow-hidden bg-surface text-primary-black"
+    >
       {!preview && !local && (
         <EditorThumbnail
           fileId={fileId}
@@ -3730,7 +3733,7 @@ export function FileEditor({
           event.currentTarget.value = "";
         }}
       />
-      <EditorPanel open={panelsOpen && !prototypeMode} width={256}>
+      <EditorPanel open={panelsOpen && !prototypeMode} width={256} kind="layers">
         <aside className="z-10 flex h-full w-64 shrink-0 flex-col border-r border-primary-grey/70 bg-primary-white">
           <div className="editor-panel-heading flex h-16 shrink-0 items-center gap-2 border-b border-primary-grey/70 px-3 text-sm">
             <Link
@@ -3931,7 +3934,11 @@ export function FileEditor({
           </div>
         </aside>
       </EditorPanel>
-      <EditorPanel open={panelsOpen && !prototypeMode} width={53}>
+      <EditorPanel
+        open={!mobileLayout && panelsOpen && toolbarPlacement === "left" && !prototypeMode}
+        width={53}
+        kind="tools"
+      >
         <aside className="editor-tool-rail z-10 h-full w-[53px] shrink-0 border-r border-primary-grey/70 bg-primary-white px-1.5 py-3">
           {toolRail()}
         </aside>
@@ -4040,7 +4047,7 @@ export function FileEditor({
                 view={view}
                 viewport={viewport}
                 liveVersion={room.commentsVersion}
-                toolbarControls={!prototypeMode ? viewMenu : undefined}
+                toolbarControls={!prototypeMode ? canvasControls : undefined}
               />
             </div>
           )}
@@ -4536,8 +4543,8 @@ export function FileEditor({
             );
           })}
           {!prototypeMode && (preview || local || !viewPreferences.comments) && (
-            <div data-canvas-control className="absolute right-4 top-4 z-20">
-              {viewMenu}
+            <div data-canvas-control className="absolute right-4 top-20 z-20 md:top-4">
+              {canvasControls}
             </div>
           )}
           {marquee && (
@@ -4552,7 +4559,10 @@ export function FileEditor({
               }}
             />
           )}
-          <EditorChrome visible={!panelsOpen || prototypeMode}>
+          <EditorChrome
+            visible={(!panelsOpen || prototypeMode) && !(mobileLayout && inspectorOpen)}
+            mobileVisible={(!mobilePanelsOpen || prototypeMode) && !inspectorOpen}
+          >
             <div data-canvas-control className={minimisedFileBarClass}>
               <Link
                 href={backHref}
@@ -4568,7 +4578,14 @@ export function FileEditor({
               {!prototypeMode && <PanelToggle expanded={false} onClick={togglePanels} />}
             </div>
           </EditorChrome>
-          <EditorChrome visible={!panelsOpen && !prototypeMode}>
+          <EditorChrome
+            visible={
+              (!panelsOpen || toolbarPlacement === "bottom") &&
+              !prototypeMode &&
+              !(mobileLayout && inspectorOpen)
+            }
+            mobileVisible={!mobilePanelsOpen && !prototypeMode && !inspectorOpen}
+          >
             <div data-canvas-control className={minimisedToolbarClass(toolbarPlacement)}>
               {toolRail(toolbarPlacement === "bottom")}
             </div>
@@ -4654,7 +4671,7 @@ export function FileEditor({
           }}
         />
       )}
-      <EditorPanel open={inspectorOpen} width={296} side="right">
+      <EditorPanel open={inspectorOpen} width={296} side="right" kind="inspector">
         <aside
           data-ph-public-label
           aria-label="Inspector"
@@ -4687,6 +4704,17 @@ export function FileEditor({
                 className={`rounded-md px-2.5 py-1.5 text-xs hover:bg-primary-grey/20 focus-visible:outline-2 focus-visible:outline-primary-orange disabled:opacity-40 ${prototypeInspectorOpen ? "bg-primary-grey/25 text-primary-black" : "text-secondary-ink"}`}
               >
                 Prototype
+              </button>
+              <button
+                type="button"
+                aria-label="Close inspector"
+                onClick={() => {
+                  setInspectorDismissed(true);
+                  viewport.current?.focus({ preventScroll: true });
+                }}
+                className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-secondary-ink hover:bg-primary-grey/20 focus-visible:outline-2 focus-visible:outline-primary-orange md:hidden"
+              >
+                <span aria-hidden="true">×</span>
               </button>
             </div>
           )}

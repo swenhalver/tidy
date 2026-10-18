@@ -11,11 +11,16 @@ test("file loading uses the saved toolbar placement in its initial server markup
   expect(bottom).toContain("Loading file");
 });
 
-test("open-by-default panels keep loading tools vertical regardless of the minimised placement", () => {
-  const markup = renderToStaticMarkup(
-    <EditorSkeleton initialPanelsOpen initialToolbarPlacement="bottom" />,
-  );
-  expect(markup).toContain('data-orientation="vertical"');
-  expect(markup).not.toContain('data-orientation="horizontal"');
-  expect(markup).not.toContain("data-skeleton-file-bar");
-});
+for (const placement of ["left", "bottom"] as const) {
+  test(`open-by-default loading respects the ${placement} toolbar preference`, () => {
+    const markup = renderToStaticMarkup(
+      <EditorSkeleton initialPanelsOpen initialToolbarPlacement={placement} />,
+    );
+    expect(markup).toContain(
+      `data-orientation="${placement === "left" ? "vertical" : "horizontal"}"`,
+    );
+    expect(markup.includes("data-skeleton-docked-tools")).toBe(placement === "left");
+    expect(markup).toContain("data-skeleton-file-bar");
+    expect(markup).toContain("editor-floating-tools");
+  });
+}
