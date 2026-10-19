@@ -41,6 +41,12 @@
   --font-serif: var(--font-instrument-serif);
 }
 
+/* Prevent browser history swipes over editor controls and panels. */
+html,
+body {
+  overscroll-behavior-x: none;
+}
+
 :root {
   color-scheme: light dark;
   /* Keep page width steady when folder navigation toggles vertical overflow. */
