@@ -39,12 +39,69 @@ const worker = new Miniflare(
     compatibilityDate: "2026-09-26",
     compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
     bindings: { BETTER_AUTH_SECRET: "worker-fixture-budget-secret-at-least-32-characters" },
-    durableObjects: { AUTH_GUARD: { className: "AuthGuard", useSQLite: true } },
+    durableObjects: {
+      AUTH_GUARD: { className: "AuthGuard", useSQLite: true },
+      TEST_MESSAGE_ROOMS: { className: "PresenceBudgetRoom", useSQLite: true },
+    },
     outboundService,
   }),
 );
 try {
   await worker.ready;
+  const overlaps = await (await worker.dispatchFetch("https://auth.test/presence-overlap")).json();
+  assert.equal(overlaps.length, 24);
+  assert.equal(
+    overlaps.every((result) => result.allowed),
+    true,
+    "Overlapping Durable Object events must retain every admitted update",
+  );
+  assert.equal(
+    Math.max(...overlaps.map((result) => result.reservations)),
+    3,
+    "Overlapping events share ten-message batches in one I/O context",
+  );
+
+  const avatarAttempts = await Promise.all(
+    Array.from({ length: 65 }, () =>
+      worker.dispatchFetch("https://auth.test/avatar-storage-budget"),
+    ),
+  );
+  assert.equal(
+    avatarAttempts.filter((r) => r.status === 204).length,
+    60,
+    "Avatar storage ceilings span callers",
+  );
+  const presenceAttempts = await Promise.all(
+    Array.from({ length: 365 }, () =>
+      worker
+        .dispatchFetch("https://auth.test/realtime-message-budget?user=presence-account")
+        .then((r) => r.json()),
+    ),
+  );
+  assert.equal(
+    presenceAttempts.filter((r) => r.allowed).length,
+    360,
+    "Prepaid presence batches share durable account capacity across invocations",
+  );
+  assert.equal(
+    (
+      await (
+        await worker.dispatchFetch(
+          "https://auth.test/realtime-message-budget?user=other-presence-account",
+        )
+      ).json()
+    ).allowed,
+    true,
+  );
+  const traceAttempts = await Promise.all(
+    Array.from({ length: 15 }, () => worker.dispatchFetch("https://auth.test/trace-export-budget")),
+  );
+  assert.equal(
+    traceAttempts.filter((r) => r.status === 204).length,
+    10,
+    "Trace and snapshot admission has one global ceiling",
+  );
+
   for (const [group, max] of [
     ["account", 10],
     ["workspace", 30],

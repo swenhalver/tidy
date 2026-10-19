@@ -1,4 +1,5 @@
 import { acquireConnection, releaseConnection } from "./connection-budget";
+import { RealtimeMessageBudget, reserveRealtimeMessages } from "./message-budget";
 import { fileEventsQuery } from "./events";
 import { roomConnectionQuery, roomSessionsQuery } from "./authorization";
 import { can } from "../organizations/roles";
@@ -44,8 +45,12 @@ export class FileRoom extends DurableObject<CloudflareEnv> {
   private authorizedAt = 0;
   private pendingConnections = new Map<string, string>();
   private messageWindow = { at: 0, count: 0, accounts: new Map<string, number>() };
+  private messageBudget: RealtimeMessageBudget;
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
+    this.messageBudget = new RealtimeMessageBudget((userId) =>
+      reserveRealtimeMessages(env, userId),
+    );
     this.ctx.blockConcurrencyWhile(async () => {
       this.sequence = (await this.ctx.storage.get<number>("sequence")) ?? 0;
       this.fileId = (await this.ctx.storage.get<string>("fileId")) ?? null;
@@ -200,13 +205,15 @@ export class FileRoom extends DurableObject<CloudflareEnv> {
     }
     if (attachment) {
       this.participants.delete(attachment.sessionId);
+      if (peer && ![...this.participants.values()].some((item) => item.userId === peer.userId))
+        this.messageBudget.forget(peer.userId);
       this.ctx.waitUntil(this.ctx.storage.delete(`peer:${attachment.sessionId}`));
       this.broadcast({ type: "leave", sessionId: attachment.sessionId }, socket);
     }
   }
   async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
-    const attachment = socket.deserializeAttachment() as Attachment | null;
-    const peer = attachment ? this.participants.get(attachment.sessionId) : undefined;
+    let attachment = socket.deserializeAttachment() as Attachment | null;
+    let peer = attachment ? this.participants.get(attachment.sessionId) : undefined;
     if (!attachment || !peer || attachment.expiresAt <= Date.now()) {
       this.remove(socket);
       return;
@@ -232,6 +239,14 @@ export class FileRoom extends DurableObject<CloudflareEnv> {
     this.messageWindow.accounts.set(peer.userId, accountCount);
     socket.serializeAttachment(attachment);
     if (accountCount > 60 || ++this.messageWindow.count > 600) return;
+    if (!(await this.messageBudget.consume(peer.userId))) return;
+    // Authorization or socket cleanup can interleave while the guard is awaited.
+    attachment = socket.deserializeAttachment() as Attachment | null;
+    peer = attachment ? this.participants.get(attachment.sessionId) : undefined;
+    if (!attachment || !peer || attachment.expiresAt <= Date.now()) {
+      this.remove(socket);
+      return;
+    }
     try {
       const input = JSON.parse(message);
       if (input.type === "ping") {
