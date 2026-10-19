@@ -74,10 +74,12 @@ test("selection outlines keep screen-pixel widths through zoom and restore layer
       return {
         width: parseFloat(style.outlineWidth) * scale,
         offset: parseFloat(element.style.outlineOffset) * scale,
+        inheritedZoom: style.getPropertyValue("--canvas-zoom"),
       };
     });
     expect(actual.width).toBeCloseTo(2, 1);
     expect(actual.offset).toBeCloseTo(1, 1);
+    expect(actual.inheritedZoom).toBe("");
   }
   await page.keyboard.up("Control");
   await page.getByRole("button", { name: "Select Header", exact: true }).click();
