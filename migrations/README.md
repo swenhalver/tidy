@@ -109,3 +109,37 @@ restores return a capacity error; increasing the allowance or explicitly removin
 named history requires a separate product/operator decision. Run
 `bun test:versions:db` and `bun test:runtime:db` using disposable local fixtures.
 Production migration requires explicit approval.
+
+## Service synchronization
+
+`20261019-service-synchronization.sql` adds subscription check scheduling and a
+PR lookup index. Apply it before deploying the service synchronization changes.
+The existing table grants cover the added column; reapply the runtime manifest
+when provisioning a new runtime role. Both local setup scripts include it.
+
+Measure the migration on a production-sized copy and use a low-traffic maintenance
+window. The column addition retains an `ACCESS EXCLUSIVE` lock on
+`organization_billing` until commit, and both non-concurrent index builds block
+writes to their tables. Billing reads and webhook processing can wait or reach
+their lock deadlines during this window. If the GitHub index build is too long,
+prepare a separate non-transactional concurrent index build before rollout;
+`CREATE INDEX CONCURRENTLY` cannot run inside this migration's transaction.
+
+Hosted Pro allowances include a 24-hour grace period after the recorded billing
+period. Rows without a period use their last update plus 24 hours; review and
+refresh any such existing subscriptions before applying the migration. No stored
+files or memberships are removed when a workspace returns to Free. Self-hosted
+allowances are unchanged.
+
+Set a separate random `BILLING_RECONCILIATION_SECRET` (at least 32 characters) to
+enable the optional canonical subscription checks through the existing five-minute
+Worker schedule and self binding. Each invocation checks at most ten subscriptions
+in a ten-second admission window, starting with those not checked for six hours.
+Failed checks rotate through the same queue and surface a scheduled-task failure.
+Monitor backlog age and `billing_reconciliation_failed` events as the account count
+grows; the schedule is bounded rather than a guarantee that every subscription is
+checked within six hours. Keep the privacy cleanup secret configured independently.
+
+Run `bun test:plans`, the GitHub disposable database suite, and
+`bun test:runtime:db` for validation. Production migration, secret configuration,
+and deployment remain separate approved operations.
