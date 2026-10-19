@@ -388,7 +388,6 @@ export function FillInspector({
                 replayLabel
                 label={`${prefix} color`}
                 nodes={selected}
-                tokens={tokens}
                 get={(node) => {
                   const paint = nodePaints(node)[index];
                   return paint.type === "solid"
@@ -417,7 +416,16 @@ export function FillInspector({
                 read((paint) => (paint.type === "solid" ? (paint.token ?? "") : "")),
                 (name) =>
                   update((paint) =>
-                    paint.type === "solid" ? { ...paint, token: name || undefined } : paint,
+                    paint.type === "solid"
+                      ? {
+                          ...paint,
+                          color:
+                            !name && paint.token
+                              ? (tokens[paint.token] ?? paint.color)
+                              : paint.color,
+                          token: name || undefined,
+                        }
+                      : paint,
                   ),
               )}
             </>
@@ -552,7 +560,6 @@ export function FillInspector({
                           replayLabel
                           label={`Stop ${stopIndex + 1} color`}
                           nodes={selected}
-                          tokens={tokens}
                           get={(node) => {
                             const stop = get(node)!;
                             return stop.token ? (tokens[stop.token] ?? stop.color) : stop.color;
@@ -571,7 +578,15 @@ export function FillInspector({
                         {token(
                           `Stop ${stopIndex + 1} token`,
                           shared(selected, (node) => get(node)?.token ?? ""),
-                          (name) => updateStop((stop) => ({ ...stop, token: name || undefined })),
+                          (name) =>
+                            updateStop((stop) => ({
+                              ...stop,
+                              color:
+                                !name && stop.token
+                                  ? (tokens[stop.token] ?? stop.color)
+                                  : stop.color,
+                              token: name || undefined,
+                            })),
                         )}
                       </div>
                     );

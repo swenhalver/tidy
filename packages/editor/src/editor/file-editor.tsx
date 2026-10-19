@@ -163,7 +163,8 @@ import {
   zoomImageCrop,
   type ImageCrop,
 } from "../design/image-crop";
-import { ColorTokens } from "./color-tokens";
+import { CanvasColorPicker } from "./canvas-color-picker";
+import { TokenPanel } from "./token-panel";
 import { resolvedColorTokens, resolvedDocumentNodes } from "../design/design-tokens";
 import { useEditorEvent } from "./use-editor-event";
 import { useFrameEvent } from "./use-frame-event";
@@ -3928,7 +3929,10 @@ export function FileEditor({
   );
 
   return (
-    <main
+    <CanvasColorPicker
+      canvas={viewport}
+      nodes={renderedNodes}
+      tokens={tokens}
       data-mobile-panels-open={mobilePanelsOpen}
       className="tidy-editor editor-workspace relative flex h-full min-h-0 w-full overflow-hidden bg-surface text-primary-black"
     >
@@ -4026,12 +4030,11 @@ export function FileEditor({
             className="min-h-0 flex-1 overflow-auto"
           >
             {sidebarTab === "tokens" ? (
-              <fieldset disabled={readOnly}>
-                <ColorTokens
-                  document={snapshot.content}
-                  onChange={(transform) => void changeDocument(transform)}
-                />
-              </fieldset>
+              <TokenPanel
+                document={snapshot.content}
+                readOnly={readOnly}
+                onChange={(transform) => void changeDocument(transform)}
+              />
             ) : (
               <>
                 <div className="flex items-center justify-between px-4 pb-2 pt-5">
@@ -5174,6 +5177,6 @@ export function FileEditor({
           onClose={() => setPageMenu(null)}
         />
       )}
-    </main>
+    </CanvasColorPicker>
   );
 }
