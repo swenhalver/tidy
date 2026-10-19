@@ -80,6 +80,20 @@ provider accounts. Do not use a production database URL for local commands.
 Stop the database with `docker compose down`. Adding `-v` also deletes its data.
 See [self-hosting](#self-hosting) before making a deployment public.
 
+## Desktop app
+
+The standalone Electron app has its own React interface and runs independently of
+the web app. It is the foundation for a local-first coding harness control pane and
+shared design canvas. Use Node.js 22.12+ alongside Bun.
+
+```sh
+bun dev:desktop
+bun run build:desktop
+bun run package:desktop
+```
+
+See [desktop development](apps/desktop/README.md) for architecture and packaging.
+
 ## Browser extension
 
 The extension captures webpages for use in Tidy.
@@ -203,15 +217,17 @@ See [`package.json`](package.json) for available test commands.
 
 ### Repository layout
 
-| Directory                  | Contents                                 |
-| -------------------------- | ---------------------------------------- |
-| `apps/web`                 | Canvas app, server and Cloudflare Worker |
-| `apps/site`                | Website and changelog                    |
-| `apps/extension`           | Webpage capture extension                |
-| `apps/gpt-plugin`          | Agent plugin and design preview          |
-| `packages/design`          | Shared design and capture formats        |
-| `packages/design-renderer` | Editor, preview and export rendering     |
-| `packages/ui`              | Shared interface controls                |
+| Directory                  | Contents                                         |
+| -------------------------- | ------------------------------------------------ |
+| `apps/web`                 | Canvas app, server and Cloudflare Worker         |
+| `apps/site`                | Website and changelog                            |
+| `apps/extension`           | Webpage capture extension                        |
+| `apps/desktop`             | Local projects, design canvas and coding threads |
+| `apps/gpt-plugin`          | Agent plugin and design preview                  |
+| `packages/design`          | Shared design and capture formats                |
+| `packages/design-renderer` | Editor, preview and export rendering             |
+| `packages/editor`          | Shared canvas, editing tools and inspectors      |
+| `packages/ui`              | Shared interface controls                        |
 
 Use `bun dev:site` to run the website on port `3001`.
 

@@ -4,12 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./fonts.css": "./fonts.css",
     "./privacy-policy": "./privacy-policy.tsx",
     "./privacy-policy.css": "./privacy-policy.css",
     "./avatar": "./avatar.tsx",
     "./button": "./button.tsx",
     "./select-menu": "./select-menu.tsx",
-    "./tidy-logo": "./tidy-logo.tsx"
+    "./tidy-logo": "./tidy-logo.tsx",
+    "./harness-icon": "./harness-icon.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

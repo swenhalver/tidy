@@ -15,17 +15,25 @@ and assets retain their original licenses and copyright notices.
   as author. It omits a standalone license file; the declaration and MIT terms
   are retained in `licenses/bundled/OpenFig.txt`, with that limitation recorded.
 
+- **pdf-lib**, **@pdf-lib/standard-fonts** and **@pdf-lib/upng**: MIT. Their upstream
+  notices are retained in `licenses/bundled/`. **pako** retains its MIT and Zlib
+  notices in `licenses/bundled/pako.txt`; **tslib** retains its 0BSD notice there.
+- **ImageTracerJS**: Unlicense; retained in `licenses/bundled/imagetracerjs.txt`.
 - **Iconoir** icons: MIT, copyright Iconoir contributors. The full license is
-  retained at `apps/web/public/icons/LICENSE.iconoir`.
+  retained at `apps/web/public/icons/LICENSE.iconoir` and beside the shared editor
+  icons in `packages/editor/src/assets/icons/LICENSE.iconoir`.
 - **Instrument Serif**: SIL Open Font License 1.1, copyright the Instrument Serif
   Project Authors. Existing `OFL.txt` files accompany copies under `apps/web`,
-  `apps/site` and `apps/extension`.
+  `apps/site` and `apps/extension`. Shared offline fonts for desktop are accompanied
+  by `packages/ui/fonts/OFL-InstrumentSerif.txt`.
 - **Instrument Sans**: SIL Open Font License 1.1, copyright the Instrument Sans
-  Project Authors. Its license accompanies the site font as `OFL-InstrumentSans.txt`.
+  Project Authors. Its license accompanies the site font as `OFL-InstrumentSans.txt`
+  and the shared offline font as `packages/ui/fonts/OFL-InstrumentSans.txt`.
 - Provider logos and names (Google, GitHub, Linear, Codex, Claude and OpenCode) identify integrations.
   Their owners retain trademark rights. Follow the attribution and source notes
   in `apps/web/public/connectors/README.md` and `apps/web/public/agents/README.md`;
-  do not imply provider endorsement.
+  desktop copies retain the notice in `packages/ui/harness-icons/README.md`,
+  packaged as `licenses/harness-marks.txt`. Do not imply provider endorsement.
 - Tidy branding and application icons are project assets. The Apache License 2.0
   does not grant rights to Tidy trademarks.
 
