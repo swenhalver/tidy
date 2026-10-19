@@ -171,6 +171,7 @@ import { useEditorPerformance } from "../host-performance";
 import { useVisibleArtboards } from "./use-visible-artboards";
 import { ImageViewportProvider } from "@tidy/design-renderer/image-viewport";
 import { CanvasArtwork } from "./canvas-artwork";
+import { CanvasArtboardLabels } from "./canvas-artboard-labels";
 import {
   attachCanvasElements,
   canvasElements,
@@ -3804,6 +3805,18 @@ export function FileEditor({
     ) : null;
 
   const panelSelect = useEditorEvent(selectNode);
+  const selectArtboard = useEditorEvent((id: string, additive: boolean) => {
+    selectNode(id, additive);
+    viewport.current?.focus({ preventScroll: true });
+  });
+  const renameArtboard = useEditorEvent((id: string, draft: string) => {
+    const name = draft.trim();
+    if (readOnly || !name) return;
+    void changeDocument((content) => ({
+      ...content,
+      nodes: changedLayers(content, [id], { name }),
+    }));
+  });
   const panelMenu = useEditorEvent(openNodeMenu);
   const panelMove = useEditorEvent(
     (id: string, target: string, position: "before" | "inside" | "after") =>
@@ -4371,6 +4384,16 @@ export function FileEditor({
                 onTextFinish={artworkTextFinish}
               />
             </ImageViewportProvider>
+            {!prototypeMode && (
+              <CanvasArtboardLabels
+                nodesById={renderedById}
+                visibleRootIds={visibleRootIds}
+                selectedIds={selectedIds}
+                readOnly={readOnly}
+                onSelect={selectArtboard}
+                onRename={renameArtboard}
+              />
+            )}
           </div>
           <CanvasHover
             ref={hover}
