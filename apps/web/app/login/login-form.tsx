@@ -3,7 +3,7 @@
 import { unstable_rethrow } from "next/navigation";
 import { navigateWithFreshSession } from "@/lib/navigation/actions";
 import { NavigationLink as Link } from "@/components/ui/navigation-link";
-import { useState, type FormEvent } from "react";
+import { useRef, useTransition, useState, type FormEvent } from "react";
 import { passwordAuthClient, identifyPostHogUser } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
@@ -27,18 +27,26 @@ export function LoginForm({
   initialError?: string;
   accountDeleted?: boolean;
 }) {
+  const [, startTransition] = useTransition();
+  const submitting = useRef(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(initialError);
   const [verificationEmail, setVerificationEmail] = useState<string | null>(null);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     setPending(true);
     setError("");
+    const form = new FormData(event.currentTarget);
+    startTransition(() => signIn(form));
+  }
+
+  async function signIn(form: FormData) {
     const reportError = appErrorReporter("sign_in");
 
     try {
-      const form = new FormData(event.currentTarget);
       const result = await passwordAuthClient.signIn.email({
         email: String(form.get("email")),
         password: String(form.get("password")),
@@ -69,6 +77,7 @@ export function LoginForm({
       reportError(cause);
       setError("Unable to sign in. Please try again.");
     } finally {
+      submitting.current = false;
       setPending(false);
     }
   }

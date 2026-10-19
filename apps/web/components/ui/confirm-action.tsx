@@ -2,7 +2,7 @@
 
 import { unstable_rethrow } from "next/navigation";
 import { Dialog } from "@/components/ui/dialog";
-import { useId, useRef, useState, type ReactNode } from "react";
+import { useTransition, useId, useRef, useState, type ReactNode } from "react";
 
 export function ConfirmAction({
   label,
@@ -25,13 +25,20 @@ export function ConfirmAction({
 }) {
   const id = useId();
   const dialog = useRef<HTMLDialogElement>(null);
+  const confirming = useRef(false);
+  const [, startTransition] = useTransition();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
-  async function confirm() {
-    if (pending) return;
+  function confirm() {
+    if (confirming.current) return;
+    confirming.current = true;
     setPending(true);
     setError("");
+    startTransition(confirmAction);
+  }
+
+  async function confirmAction() {
     try {
       await onConfirm();
       dialog.current?.close();
@@ -41,6 +48,7 @@ export function ConfirmAction({
         error instanceof Error ? error.message : "Could not complete the action. Try again.",
       );
     } finally {
+      confirming.current = false;
       setPending(false);
     }
   }
@@ -66,7 +74,7 @@ export function ConfirmAction({
         aria-labelledby={`${id}-title`}
         aria-describedby={`${id}-description`}
         onCancel={(event) => {
-          if (pending) event.preventDefault();
+          if (confirming.current) event.preventDefault();
         }}
       >
         <h2
@@ -90,7 +98,9 @@ export function ConfirmAction({
             type="button"
             autoFocus
             disabled={pending}
-            onClick={() => dialog.current?.close()}
+            onClick={() => {
+              if (!confirming.current) dialog.current?.close();
+            }}
             className="rounded-lg px-4 py-2.5 text-sm hover:bg-primary-grey/20 focus-visible:outline-2 focus-visible:outline-primary-orange disabled:opacity-50"
           >
             Cancel
@@ -98,7 +108,7 @@ export function ConfirmAction({
           <button
             type="button"
             disabled={pending}
-            onClick={() => void confirm()}
+            onClick={confirm}
             className="rounded-lg bg-danger-fill px-4 py-2.5 text-sm font-medium text-on-danger hover:bg-danger-fill-hover focus-visible:outline-2 focus-visible:outline-danger disabled:opacity-50"
           >
             <span data-ph-public={replayLabel || undefined}>{pending ? "Working…" : label}</span>

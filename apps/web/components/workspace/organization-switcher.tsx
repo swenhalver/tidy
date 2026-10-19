@@ -5,7 +5,7 @@ import { navigateWithFreshSession } from "@/lib/navigation/actions";
 import { Avatar } from "@/components/ui/avatar";
 import { avatarPath } from "@/lib/avatars";
 import { Dialog } from "@/components/ui/dialog";
-import { useId, useRef, useState } from "react";
+import { useTransition, useId, useRef, useState } from "react";
 import posthog from "@/lib/posthog-client";
 import { authClient } from "@/lib/auth-client";
 import { SignOutButton } from "@/app/sign-out-button";
@@ -28,6 +28,8 @@ export function OrganizationSwitcher({
   const id = useId();
   const dropdown = useRef<HTMLDivElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
+  const [, startTransition] = useTransition();
+  const switching = useRef(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
@@ -42,10 +44,15 @@ export function OrganizationSwitcher({
   const organizationPath = avatarPath("organization", organizationId);
   const active = currentOrganizations.find((org) => org.id === organizationId);
 
-  async function switchOrganization(id: string) {
-    if (pending || id === organizationId) return;
+  function switchOrganization(id: string) {
+    if (switching.current || id === organizationId) return;
+    switching.current = true;
     setPending(true);
     setError("");
+    startTransition(() => switchOrganizationAction(id));
+  }
+
+  async function switchOrganizationAction(id: string) {
     try {
       const result = await authClient.organization.setActive({ organizationId: id });
       if (result.error) throw new Error(result.error.message || "Unable to switch organization.");
@@ -53,6 +60,7 @@ export function OrganizationSwitcher({
       await navigateWithFreshSession("/files");
     } catch (error) {
       unstable_rethrow(error);
+      switching.current = false;
       setError(error instanceof Error ? error.message : "Unable to switch organization.");
       setPending(false);
     }

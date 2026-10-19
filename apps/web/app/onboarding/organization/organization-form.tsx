@@ -2,7 +2,7 @@
 
 import { unstable_rethrow } from "next/navigation";
 import { navigateWithFreshSession } from "@/lib/navigation/actions";
-import { useState, type FormEvent } from "react";
+import { useRef, useTransition, useState, type FormEvent } from "react";
 import posthog from "@/lib/posthog-client";
 import { createOrganization } from "./actions";
 import { Button } from "@/components/ui/button";
@@ -16,17 +16,24 @@ export function OrganizationForm({
   inviteTeam?: boolean;
   onPendingChange?: (pending: boolean) => void;
 }) {
+  const [, startTransition] = useTransition();
+  const submitting = useRef(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     setPending(true);
     onPendingChange?.(true);
     setError("");
+    const name = String(new FormData(event.currentTarget).get("name")).trim();
+    startTransition(() => submit(name));
+  }
 
+  async function submit(name: string) {
     try {
-      const name = String(new FormData(event.currentTarget).get("name")).trim();
       const result = await createOrganization(name);
 
       if (result.error || !result.data) {
@@ -45,6 +52,7 @@ export function OrganizationForm({
       unstable_rethrow(cause);
       setError("Unable to create your organisation. Please try again.");
     } finally {
+      submitting.current = false;
       setPending(false);
       onPendingChange?.(false);
     }

@@ -2,19 +2,26 @@
 
 import { unstable_rethrow } from "next/navigation";
 import { navigateWithFreshSession } from "@/lib/navigation/actions";
-import { useState } from "react";
+import { useRef, useTransition, useState } from "react";
 import { authClient, resetPostHogUser } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
 
 export function AcceptInvitation({ invitationId }: { invitationId: string }) {
+  const [, startTransition] = useTransition();
+  const submitting = useRef(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
-  async function accept() {
+  function accept() {
+    if (submitting.current) return;
+    submitting.current = true;
     setPending(true);
     setError("");
+    startTransition(acceptAction);
+  }
 
+  async function acceptAction() {
     try {
       const result = await authClient.organization.acceptInvitation({ invitationId });
       if (result.error || !result.data) {
@@ -31,6 +38,7 @@ export function AcceptInvitation({ invitationId }: { invitationId: string }) {
       unstable_rethrow(cause);
       setError("Unable to accept this invitation. Please try again.");
     } finally {
+      submitting.current = false;
       setPending(false);
     }
   }
@@ -48,11 +56,20 @@ export function AcceptInvitation({ invitationId }: { invitationId: string }) {
 }
 
 export function SwitchAccountButton({ invitationId }: { invitationId: string }) {
+  const [, startTransition] = useTransition();
+  const submitting = useRef(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
-  async function switchAccount() {
+  function switchAccount() {
+    if (submitting.current) return;
+    submitting.current = true;
     setPending(true);
+    setError("");
+    startTransition(switchAccountAction);
+  }
+
+  async function switchAccountAction() {
     try {
       const result = await authClient.signOut();
       if (result.error) {
@@ -67,6 +84,7 @@ export function SwitchAccountButton({ invitationId }: { invitationId: string }) 
       unstable_rethrow(cause);
       setError("Unable to sign out. Please try again.");
     } finally {
+      submitting.current = false;
       setPending(false);
     }
   }
