@@ -1,14 +1,35 @@
-import type { Thread, ThreadSummary, Message } from "./contracts";
-import type { ToolActivity } from "./tool-activity";
+import type { Thread, ThreadSummary, ProjectSnapshot, DesktopEvent } from "./contracts";
+export type ThreadPatch = Omit<Extract<DesktopEvent, { type: "thread-patch" }>, "type">;
 
-export type ThreadPatch = {
-  thread: Omit<Thread, "messages" | "toolActivities">;
-  summary: ThreadSummary;
-  messages: Message[];
-  toolActivities: ToolActivity[];
-  toolActivityIds: string[];
-};
-
+export function summarizeThread(thread: Thread): ThreadSummary {
+  let preview: string | undefined;
+  for (let index = thread.messages.length - 1; index >= 0; index--) {
+    const message = thread.messages[index];
+    if (message.role === "assistant") {
+      preview = message.text.slice(0, 320);
+      break;
+    }
+  }
+  return {
+    revision: thread.revision,
+    id: thread.id,
+    projectId: thread.projectId,
+    title: thread.title,
+    harness: thread.harness,
+    doneAt: thread.doneAt,
+    settings: thread.settings,
+    actualModel: thread.actualModel,
+    usage: thread.usage,
+    preview,
+    messageCount: thread.messages.length,
+    designIds: thread.designIds,
+    status: thread.status,
+    activity: thread.activity,
+    pendingApprovalCount: thread.pendingApprovals?.length,
+    error: thread.error,
+    updatedAt: thread.updatedAt,
+  };
+}
 /** Preserve unchanged message/row identities as well as avoiding history copies over IPC. */
 export function applyThreadPatch(previous: Thread, patch: ThreadPatch): Thread {
   if (
@@ -39,5 +60,21 @@ export function applyThreadPatch(previous: Thread, patch: ThreadPatch): Thread {
     ...patch.thread,
     messages: merge(previous.messages, patch.messages),
     toolActivities: nextTools,
+  };
+}
+
+export function applyProjectEvent(snapshot: ProjectSnapshot, event: DesktopEvent): ProjectSnapshot {
+  const projectId = event.type === "designs" ? event.projectId : event.thread.projectId;
+  if (projectId !== snapshot.project.id) return snapshot;
+  if (event.type === "designs")
+    return { ...snapshot, designs: event.designs, folders: event.folders };
+  const summary = event.type === "thread-patch" ? event.summary : summarizeThread(event.thread);
+  const previous = snapshot.threads.find((item) => item.id === summary.id);
+  if (previous && previous.revision > summary.revision) return snapshot;
+  return {
+    ...snapshot,
+    threads: previous
+      ? snapshot.threads.map((item) => (item.id === summary.id ? summary : item))
+      : [summary, ...snapshot.threads],
   };
 }

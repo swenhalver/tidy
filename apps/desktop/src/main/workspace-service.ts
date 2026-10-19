@@ -1,3 +1,4 @@
+import { summarizeThread } from "../shared/thread-updates";
 import {
   approvalDecisionSchema,
   validatePermissionMode,
@@ -6,13 +7,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { watch, type FSWatcher } from "node:fs";
 import { z } from "zod";
-import {
-  summarizeThread,
-  type DesktopEvent,
-  type HarnessId,
-  type Thread,
-  type ThreadSummary,
-} from "../shared/contracts";
+import type { DesktopEvent, HarnessId, Thread, ThreadSummary } from "../shared/contracts";
 import { findHarness, startHarness, type HarnessUpdate, type RunningHarness } from "./harnesses";
 import {
   attachmentSchema,
@@ -78,9 +73,7 @@ export class WorkspaceService {
   async observe(projectId: string) {
     if (this.watchers.has(projectId)) return;
     const directories = await Promise.all(
-      ["designs", "folders"].map((kind) =>
-        this.store.storagePath(projectId, kind as "designs" | "folders"),
-      ),
+      (["designs", "folders"] as const).map((kind) => this.store.storagePath(projectId, kind)),
     );
     let refresh: ReturnType<typeof setTimeout> | undefined;
     const watchers = directories.map((directory) =>
@@ -400,8 +393,7 @@ export class WorkspaceService {
     } else if (update.type === "model") thread.actualModel = update.model.slice(0, 200);
     else if (update.type === "session") {
       if (z.string().uuid().safeParse(update.id).success) thread.sessionId = update.id;
-    } else if (update.type === "activity") thread.activity = update.text.slice(0, 500);
-    else if (update.type === "error") thread.error = update.text.slice(0, 4000);
+    } else if (update.type === "error") thread.error = update.text.slice(0, 4000);
     else {
       let message = thread.messages.find((item) => item.id === job.messages.get(update.id));
       if (!message) {
