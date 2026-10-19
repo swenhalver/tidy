@@ -3348,7 +3348,10 @@ integration(
     );
     const attempts = await Promise.allSettled(
       Array.from({ length: 8 }, () =>
-        comments.createComment(file.id, invitedId, 0, 0, "Concurrent"),
+        comments.createCommentWithMessage(file.id, invitedId, 0, 0, "Concurrent", "page-1", {
+          threadId: crypto.randomUUID(),
+          messageId: crypto.randomUUID(),
+        }),
       ),
     );
     expect(attempts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
@@ -3360,16 +3363,22 @@ integration(
         )
       ).rows[0].count,
     ).toBe(COMMENT_LIMITS.threadsPerFile);
-    const accepted = attempts.find(
-      (result) => result.status === "fulfilled",
-    ) as PromiseFulfilledResult<string>;
+    const accepted = attempts.find((result) => result.status === "fulfilled");
+    if (accepted?.status !== "fulfilled") throw new Error("Expected a comment to be admitted.");
+    const created = accepted.value;
+    expect(
+      await comments.createCommentWithMessage(file.id, invitedId, 0, 0, "Concurrent", "page-1", {
+        threadId: created.id,
+        messageId: created.message.id,
+      }),
+    ).toEqual(created);
     await db.query(
       `insert into "designCommentMessage" ("id","threadId","authorId","body") select 'reply-'||n,$1,$2,'Fixture' from generate_series(1,$3) n`,
-      [accepted.value, ownerId, COMMENT_LIMITS.messagesPerThread - 2],
+      [created.id, ownerId, COMMENT_LIMITS.messagesPerThread - 2],
     );
     const replies = await Promise.allSettled(
       Array.from({ length: 8 }, () =>
-        comments.replyToComment(file.id, accepted.value, invitedId, "Concurrent reply"),
+        comments.replyToComment(file.id, created.id, invitedId, "Concurrent reply"),
       ),
     );
     expect(replies.filter((result) => result.status === "fulfilled")).toHaveLength(1);
@@ -3377,14 +3386,31 @@ integration(
       (
         await db.query(
           'select count(*)::int as count from "designCommentMessage" where "threadId"=$1',
-          [accepted.value],
+          [created.id],
         )
       ).rows[0].count,
     ).toBe(COMMENT_LIMITS.messagesPerThread);
-    await comments.deleteCommentThread(file.id, accepted.value, invitedId);
+    const reply = replies.find((result) => result.status === "fulfilled");
+    if (reply?.status !== "fulfilled") throw new Error("Expected a reply to be admitted.");
     expect(
-      await comments.createComment(file.id, invitedId, 0, 0, "Capacity released"),
-    ).toBeTruthy();
+      await comments.replyToComment(
+        file.id,
+        created.id,
+        invitedId,
+        "Concurrent reply",
+        reply.value.id,
+      ),
+    ).toEqual(reply.value);
+    await comments.deleteCommentThread(file.id, created.id, invitedId);
+    const released = await comments.createCommentWithMessage(
+      file.id,
+      invitedId,
+      0,
+      0,
+      "Capacity released",
+      "page-1",
+      { threadId: crypto.randomUUID(), messageId: crypto.randomUUID() },
+    );
     await db.query(
       `insert into "designCommentMessage" ("id","threadId","authorId","body") select 'file-message-'||n,'capacity-'||(((n-1)%12)+1),$1,'Fixture' from generate_series(1,$2) n`,
       [ownerId, COMMENT_LIMITS.messagesPerFile - 2],
@@ -3403,6 +3429,31 @@ integration(
         )
       ).rows[0].count,
     ).toBe(COMMENT_LIMITS.messagesPerFile);
+    const fileReply = totalAttempts.find((result) => result.status === "fulfilled");
+    if (fileReply?.status !== "fulfilled") throw new Error("Expected a file reply to be admitted.");
+    expect(
+      await comments.replyToComment(
+        file.id,
+        "capacity-1",
+        invitedId,
+        "File capacity",
+        fileReply.value.id,
+      ),
+    ).toEqual(fileReply.value);
+    expect(
+      await comments.createCommentWithMessage(
+        file.id,
+        invitedId,
+        0,
+        0,
+        "Capacity released",
+        "page-1",
+        {
+          threadId: released.id,
+          messageId: released.message.id,
+        },
+      ),
+    ).toEqual(released);
   },
 );
 
@@ -5188,5 +5239,87 @@ integration(
         else testEnvironment[key] = previous[index];
       });
     }
+  },
+);
+
+integration(
+  "comment receipts preserve stable IDs and explicit retries do not duplicate or overwrite messages",
+  async () => {
+    const { createCommentWithMessage, replyToComment, listComments } =
+      await import("../design/comments");
+    const { createDesignFileForUser } = await import("../design/service");
+    const { ensureEditorDocument } = await import("../design/document-service");
+    const file = await createDesignFileForUser(ownerId, orgId, "Comment receipts");
+    await ensureEditorDocument(ownerId, file.id);
+    const ids = { threadId: crypto.randomUUID(), messageId: crypto.randomUUID() };
+    const created = await createCommentWithMessage(
+      file.id,
+      ownerId,
+      10,
+      20,
+      "First",
+      "page-1",
+      ids,
+    );
+    expect(created.id).toBe(ids.threadId);
+    expect(created.message.id).toBe(ids.messageId);
+    expect(Number.isFinite(Date.parse(created.message.createdAt))).toBe(true);
+    const retried = await createCommentWithMessage(
+      file.id,
+      ownerId,
+      10,
+      20,
+      "First",
+      "page-1",
+      ids,
+    );
+    expect(retried).toEqual(created);
+    await expect(
+      createCommentWithMessage(file.id, ownerId, 10, 20, "First", "page-1", {
+        threadId: ids.threadId,
+        messageId: crypto.randomUUID(),
+      }),
+    ).rejects.toThrow("Comment thread already exists.");
+    await expect(
+      createCommentWithMessage(file.id, ownerId, 10, 20, "First", "page-1", {
+        threadId: ids.threadId,
+      }),
+    ).rejects.toThrow("Comment thread already exists.");
+    await expect(
+      createCommentWithMessage(file.id, ownerId, 10, 20, "Changed", "page-1", ids),
+    ).rejects.toThrow();
+    await expect(
+      createCommentWithMessage(file.id, ownerId, 11, 20, "First", "page-1", ids),
+    ).rejects.toThrow("Comment thread already exists.");
+    await expect(
+      createCommentWithMessage(file.id, invitedId, 10, 20, "First", "page-1", ids),
+    ).rejects.toThrow("Comment thread already exists.");
+    await expect(
+      createCommentWithMessage(file.id, ownerId, 10, 20, "First", "page-1", {
+        threadId: crypto.randomUUID(),
+        messageId: ids.messageId,
+      }),
+    ).rejects.toThrow("Comment message already exists.");
+    const replyId = crypto.randomUUID();
+    const replies = await Promise.all([
+      replyToComment(file.id, created.id, ownerId, "Reply", replyId),
+      replyToComment(file.id, created.id, ownerId, "Reply", replyId),
+    ]);
+    expect(replies[0]).toEqual(replies[1]);
+    expect(replies[0].id).toBe(replyId);
+    await expect(
+      replyToComment(file.id, created.id, ownerId, "Overwrite", replyId),
+    ).rejects.toThrow();
+    await expect(
+      replyToComment(file.id, created.id, invitedId, "Reply", replyId),
+    ).rejects.toThrow();
+    const other = await createDesignFileForUser(ownerId, orgId, "Other comment file");
+    await ensureEditorDocument(ownerId, other.id);
+    await expect(
+      createCommentWithMessage(other.id, ownerId, 10, 20, "First", "page-1", ids),
+    ).rejects.toThrow();
+    const page = (await listComments(file.id, ownerId))!;
+    expect(page.threads).toHaveLength(1);
+    expect(page.threads[0].messages.map((message) => message.body)).toEqual(["First", "Reply"]);
   },
 );

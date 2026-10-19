@@ -3,9 +3,13 @@
 import { createPortal } from "react-dom";
 import { EditorNotification } from "./editor-notification";
 import { mergeCommentPages } from "@/lib/design/comment-pages";
+import { Icon } from "@/components/ui/icon";
 import { Dialog } from "@/components/ui/dialog";
 import {
   forwardRef,
+  memo,
+  useMemo,
+  useLayoutEffect,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -55,7 +59,7 @@ function Avatar({ name, image, size = 32 }: { name: string; image: string | null
   );
 }
 
-function ThreadMessage({
+const ThreadMessage = memo(function ThreadMessage({
   message,
   fileId,
   viewerId,
@@ -70,7 +74,6 @@ function ThreadMessage({
 }) {
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(message.body);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [reactionDraft, setReactionDraft] = useState<CommentReaction[] | null>(null);
   const [error, setError] = useState("");
@@ -144,7 +147,6 @@ function ThreadMessage({
             .filter((reaction) => reaction.count > 0)
         : [...message.reactions, { emoji, count: 1, reacted: true }],
     );
-    setPickerOpen(false);
     setPending(true);
     setError("");
     try {
@@ -235,38 +237,26 @@ function ThreadMessage({
                 {reaction.emoji} {reaction.count}
               </button>
             ))}
-            <button
-              data-ph-public
-              data-ph-public-label
-              type="button"
-              aria-label="Add emoji reaction"
-              aria-expanded={pickerOpen}
-              onClick={() => setPickerOpen((open) => !open)}
-              className="rounded-full border border-primary-grey px-2 py-0.5 text-xs text-secondary-ink hover:bg-primary-grey/20"
-            >
-              ☺
-            </button>
-          </div>
-        )}
-        {pickerOpen && (
-          <div
-            data-ph-public-label
-            role="group"
-            aria-label="Choose emoji reaction"
-            className="mt-1 flex flex-wrap gap-1 rounded-lg border border-primary-grey/70 bg-surface p-1 shadow-sm"
-          >
-            {COMMENT_EMOJIS.map((emoji) => (
-              <button
-                key={emoji}
-                type="button"
-                disabled={pending}
-                aria-label={`React with ${emoji}`}
-                onClick={() => void toggleReaction(emoji)}
-                className="rounded px-1.5 py-1 text-lg hover:bg-primary-grey/20 disabled:opacity-50"
-              >
-                {emoji}
-              </button>
-            ))}
+            <SelectMenu
+              label="Add emoji reaction"
+              replayLabel
+              replayOptions
+              actionMenu
+              layout="horizontal"
+              placement="top"
+              align="start"
+              dismissOnScroll
+              value=""
+              disabled={pending}
+              triggerContent="☺"
+              triggerClassName="rounded-full border border-primary-grey px-2 py-0.5 text-xs text-secondary-ink hover:bg-primary-grey/20 focus-visible:outline-2 focus-visible:outline-primary-orange disabled:opacity-50"
+              options={COMMENT_EMOJIS.map((emoji) => ({
+                value: emoji,
+                label: emoji,
+                ariaLabel: `React with ${emoji}`,
+              }))}
+              onChange={(emoji) => void toggleReaction(emoji)}
+            />
           </div>
         )}
         {error && (
@@ -277,7 +267,17 @@ function ThreadMessage({
       </div>
     </div>
   );
-}
+});
+
+type Submission = {
+  fileId: string;
+  thread: CommentThread;
+  create: boolean;
+} & (
+  | { kind: "sending" }
+  | { kind: "sent"; legacyReceipt: boolean; ackVersion: number }
+  | { kind: "failed"; error: string }
+);
 
 export const CanvasComments = forwardRef<
   CanvasCommentsHandle,
@@ -310,10 +310,24 @@ export const CanvasComments = forwardRef<
   const [activeId, setActiveId] = useState<string | null>(null);
   const [draftState, setDraft] = useState<(Point & { pageId: string }) | null>(null);
   const draft = draftState?.pageId === pageId ? draftState : null;
-  const [body, setBody] = useState("");
+  const [body, setBodyState] = useState("");
+  const bodyRef = useRef("");
+  const setBody = useCallback((value: string) => {
+    bodyRef.current = value;
+    setBodyState(value);
+  }, []);
+  const [viewer, setViewer] = useState<{ name: string; image: string | null } | null>(null);
+  const [submissions, setSubmissionState] = useState<Submission[]>([]);
+  const submissionsRef = useRef<Submission[]>([]);
+  const setSubmissions = useCallback((update: (current: Submission[]) => Submission[]) => {
+    submissionsRef.current = update(submissionsRef.current);
+    setSubmissionState(submissionsRef.current);
+  }, []);
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
-  const [posting, setPosting] = useState(false);
+  const posting = submissions.some(
+    (submission) => submission.thread.id === activeId && submission.kind === "sending",
+  );
   const [changing, setChanging] = useState(false);
   const [canModerateThreads, setCanModerateThreads] = useState(false);
   const [listOpen, setListOpen] = useState(false);
@@ -321,7 +335,10 @@ export const CanvasComments = forwardRef<
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<CommentThread | null>(null);
   const deleteDialog = useRef<HTMLDialogElement>(null);
-  const postingRef = useRef(false);
+  const creationRequests = useRef(new Map<string, Promise<boolean>>());
+  const messageList = useRef<HTMLDivElement>(null);
+  const scrollRequest = useRef<string | null>(null);
+  const readController = useRef<AbortController | null>(null);
   const interactionRef = useRef(0);
   const mutationRef = useRef<{ thread: CommentThread; resolved: boolean | null } | null>(null);
   const editor = useRef<HTMLTextAreaElement>(null);
@@ -340,6 +357,9 @@ export const CanvasComments = forwardRef<
   const refresh = useCallback(
     async (ensureThreadId?: string) => {
       const version = ++refreshVersion.current;
+      readController.current?.abort();
+      const controller = new AbortController();
+      readController.current = controller;
       try {
         const pages: CommentThread[][] = [];
         let cursor: string | null = null;
@@ -347,7 +367,7 @@ export const CanvasComments = forwardRef<
         const read = async (query: URLSearchParams): Promise<CommentPage> => {
           const response = await fetch(
             `/api/files/${encodeURIComponent(fileId)}/comments?${query}`,
-            { cache: "no-store" },
+            { cache: "no-store", signal: controller.signal },
           );
           return readJsonResponse({
             response,
@@ -355,25 +375,27 @@ export const CanvasComments = forwardRef<
             message: "Could not load comments.",
           });
         };
+        const selected = ensureThreadId ?? focusedThread.current;
+        // The list and focused thread are independent reads; do not make posting wait for both in sequence.
+        const [firstPage, detail] = await Promise.all([
+          read(new URLSearchParams({ pageId })),
+          selected ? read(new URLSearchParams({ pageId, threadId: selected })) : null,
+        ]);
         for (let index = 0; index < loadedPages.current; index++) {
           const query = new URLSearchParams({ pageId });
           if (cursor) query.set("cursor", cursor);
-          result = await read(query);
+          result = index === 0 ? firstPage : await read(query);
           if (version !== refreshVersion.current) return;
           pages.push(result.threads);
           cursor = result.nextCursor ?? null;
           if (!cursor) break;
         }
-        const selected = ensureThreadId ?? focusedThread.current;
-        if (selected) {
-          const detail = await read(new URLSearchParams({ pageId, threadId: selected }));
-          if (version !== refreshVersion.current) return;
-          pages.push(detail.threads);
-        }
+        if (detail) pages.push(detail.threads);
         if (!result || version !== refreshVersion.current) return;
         const mutation = mutationRef.current;
+        const merged = mergeCommentPages(pages);
         setThreads(
-          mergeCommentPages(pages).flatMap((thread) =>
+          merged.flatMap((thread) =>
             thread.id !== mutation?.thread.id
               ? [thread]
               : mutation.resolved === null
@@ -381,8 +403,36 @@ export const CanvasComments = forwardRef<
                 : [{ ...thread, resolved: mutation.resolved }],
           ),
         );
+        // Retain local sends until an authoritative read contains their stable message IDs.
+        const received = new Set(
+          merged.flatMap((thread) => thread.messages.map((message) => message.id)),
+        );
+        setSubmissions((current) =>
+          current.filter((submission) => {
+            // Only a detail read started after acknowledgement can confirm deletion.
+            const goneAfterAck =
+              submission.kind === "sent" &&
+              version > submission.ackVersion &&
+              selected === submission.thread.id &&
+              detail !== null &&
+              !detail.threads.some((thread) => thread.id === submission.thread.id);
+            const legacyConfirmed =
+              submission.kind === "sent" &&
+              submission.legacyReceipt &&
+              detail?.threads.some((thread) => thread.id === submission.thread.id);
+            if (
+              !received.has(submission.thread.messages[0].id) &&
+              !legacyConfirmed &&
+              !goneAfterAck
+            )
+              return true;
+            if (submission.create) creationRequests.current.delete(submission.thread.id);
+            return false;
+          }),
+        );
         setNextCursor(cursor);
         setViewerId(result.viewerId);
+        if (result.viewer) setViewer(result.viewer);
         setReactionsAvailable(result.reactionsAvailable);
         setCanModerateThreads(result.canModerateThreads);
         setLoadError("");
@@ -390,7 +440,7 @@ export const CanvasComments = forwardRef<
         if (version === refreshVersion.current) setLoadError("Could not load comments.");
       }
     },
-    [fileId, pageId],
+    [fileId, pageId, setSubmissions],
   );
 
   async function loadMore() {
@@ -403,6 +453,14 @@ export const CanvasComments = forwardRef<
       setLoadingMore(false);
     }
   }
+
+  useEffect(
+    () => () => {
+      refreshVersion.current++;
+      readController.current?.abort();
+    },
+    [fileId, pageId],
+  );
 
   useEffect(() => {
     const first = window.setTimeout(() => void refresh(), 0);
@@ -427,15 +485,35 @@ export const CanvasComments = forwardRef<
         setError("");
       },
     }),
-    [readOnly, pageId],
+    [readOnly, pageId, setBody],
   );
 
-  const pageThreads = threads.filter((thread) => (thread.pageId ?? "page-1") === pageId);
+  const pageThreads = useMemo(
+    () =>
+      mergeCommentPages([
+        threads,
+        submissions
+          .filter((submission) => submission.fileId === fileId)
+          .map((submission) => {
+            const remote = threads.find((thread) => thread.id === submission.thread.id);
+            return {
+              ...submission.thread,
+              ...(remote ? { resolved: remote.resolved, preview: remote.preview } : {}),
+            };
+          }),
+      ]).filter((thread) => (thread.pageId ?? "page-1") === pageId),
+    [threads, submissions, pageId, fileId],
+  );
   const visibleThreads = pageThreads.filter((thread) => !thread.resolved);
   const listedThreads = pageThreads.filter((thread) => thread.resolved === (filter === "resolved"));
   const active = pageThreads.find((thread) => thread.id === activeId);
   const canManageActive = Boolean(
-    active && !readOnly && (canModerateThreads || viewerId === active.createdBy),
+    active &&
+    !readOnly &&
+    (canModerateThreads || viewerId === active.createdBy) &&
+    !submissions.some(
+      (item) => item.create && item.thread.id === active.id && item.kind !== "sent",
+    ),
   );
   const point = draft ?? active ?? null;
   const width = viewport.current?.clientWidth ?? 0;
@@ -445,36 +523,136 @@ export const CanvasComments = forwardRef<
     ? Math.max(12, Math.min(height - 340, point.y * view.zoom + view.y + 22))
     : 0;
 
-  async function post() {
-    if (postingRef.current || !body.trim() || readOnly) return;
-    postingRef.current = true;
-    setPosting(true);
-    setError("");
-    const interaction = interactionRef.current;
-    try {
-      const result = draft
-        ? await addCommentThread({ fileId, x: draft.x, y: draft.y, body, pageId })
-        : activeId
-          ? await addCommentReply({ fileId, threadId: activeId, body })
-          : { kind: "error" as const, error: "Choose a comment thread." };
-      if (result.kind === "error") {
-        if (interaction === interactionRef.current) setError(result.error);
-        return;
-      }
-      if (interaction === interactionRef.current) {
-        setBody("");
-        if (result.kind === "created") {
-          setActiveId(result.id);
-          setDraft(null);
-        }
-      }
-      await refresh(result.kind === "created" ? result.id : (activeId ?? undefined));
-    } catch {
-      if (interaction === interactionRef.current) setError("Could not post comment. Try again.");
-    } finally {
-      postingRef.current = false;
-      setPosting(false);
+  useLayoutEffect(() => {
+    if (
+      scrollRequest.current &&
+      active?.messages.some((message) => message.id === scrollRequest.current)
+    ) {
+      if (messageList.current) messageList.current.scrollTop = messageList.current.scrollHeight;
+      scrollRequest.current = null;
     }
+  }, [activeId, active?.messages]);
+
+  async function send(submission: Submission) {
+    const message = submission.thread.messages[0];
+    const work = (async () => {
+      try {
+        if (!submission.create) {
+          const creation = creationRequests.current.get(submission.thread.id);
+          if (creation && !(await creation) && creationRequests.current.has(submission.thread.id))
+            throw new Error("Post the original comment before retrying this reply.");
+        }
+        const targetId =
+          submissionsRef.current.find((item) => item.thread.messages[0].id === message.id)?.thread
+            .id ?? submission.thread.id;
+        const result = submission.create
+          ? await addCommentThread({
+              fileId: submission.fileId,
+              threadId: targetId,
+              messageId: message.id,
+              x: submission.thread.x,
+              y: submission.thread.y,
+              pageId: submission.thread.pageId,
+              body: message.body,
+            })
+          : await addCommentReply({
+              fileId: submission.fileId,
+              threadId: targetId,
+              messageId: message.id,
+              body: message.body,
+            });
+        if (result.kind === "error") throw new Error(result.error);
+        if (result.kind === "created" && result.id !== submission.thread.id) {
+          setSubmissions((current) =>
+            current.map((item) =>
+              item.thread.id !== submission.thread.id
+                ? item
+                : { ...item, thread: { ...item.thread, id: result.id } },
+            ),
+          );
+          setActiveId((current) => (current === submission.thread.id ? result.id : current));
+          if (focusedThread.current === submission.thread.id) focusedThread.current = result.id;
+        }
+        setSubmissions((current) =>
+          current.map((item) =>
+            item.thread.messages[0].id !== message.id
+              ? item
+              : {
+                  ...item,
+                  kind: "sent",
+                  legacyReceipt: !result.message,
+                  ackVersion: refreshVersion.current,
+                  thread: {
+                    ...item.thread,
+                    createdBy: item.create
+                      ? (result.message?.authorId ?? item.thread.createdBy)
+                      : item.thread.createdBy,
+                    messages: [result.message ?? message],
+                  },
+                },
+          ),
+        );
+        // New receipts include the saved message; no list or thread refetch is needed to post.
+        // Older servers can still reconcile via the existing bounded comment reads.
+        if (!result.message) void refresh(result.kind === "created" ? result.id : targetId);
+        return true;
+      } catch (cause) {
+        setSubmissions((current) =>
+          current.map((item) =>
+            item.thread.messages[0].id !== message.id
+              ? item
+              : {
+                  ...item,
+                  kind: "failed",
+                  error: cause instanceof Error ? cause.message : "Could not post comment.",
+                },
+          ),
+        );
+        return false;
+      }
+    })();
+    if (submission.create) creationRequests.current.set(submission.thread.id, work);
+    const sent = await work;
+    if (sent && creationRequests.current.get(submission.thread.id) === work) {
+      creationRequests.current.delete(submission.thread.id);
+    }
+  }
+
+  function post() {
+    const text = bodyRef.current.trim();
+    if (!text || readOnly || (!draft && !active)) return;
+    const author = viewer ?? active?.messages.find((message) => message.authorId === viewerId);
+    const message: CommentMessage = {
+      id: crypto.randomUUID(),
+      authorId: viewerId ?? "viewer",
+      authorName: author && "name" in author ? author.name : (author?.authorName ?? "You"),
+      authorImage: author && "image" in author ? author.image : (author?.authorImage ?? null),
+      body: text,
+      createdAt: new Date().toISOString(),
+      reactions: [],
+    };
+    const thread: CommentThread = draft
+      ? {
+          id: crypto.randomUUID(),
+          pageId,
+          x: draft.x,
+          y: draft.y,
+          createdBy: message.authorId,
+          resolved: false,
+          messages: [message],
+        }
+      : { ...active!, messages: [message] };
+    const submission: Submission = { fileId, thread, create: Boolean(draft), kind: "sending" };
+    setSubmissions((current) => [...current, submission]);
+    setBody("");
+    setError("");
+    scrollRequest.current = message.id;
+    if (draft) {
+      setActiveId(thread.id);
+      focusedThread.current = thread.id;
+      setDraft(null);
+    }
+    void send(submission);
   }
 
   function openThread(threadId: string) {
@@ -490,17 +668,28 @@ export const CanvasComments = forwardRef<
   async function changeThread(thread: CommentThread, resolved: boolean | null) {
     if (
       mutationRef.current ||
-      postingRef.current ||
+      submissionsRef.current.some(
+        (submission) => submission.thread.id === thread.id && submission.kind === "sending",
+      ) ||
       readOnly ||
       !(canModerateThreads || viewerId === thread.createdBy)
     )
       return;
     const interaction = ++interactionRef.current;
     mutationRef.current = { thread, resolved };
+    setSubmissions((current) =>
+      current.flatMap((item) =>
+        item.thread.id !== thread.id
+          ? [item]
+          : resolved !== null && item.kind === "failed"
+            ? [{ ...item, thread: { ...item.thread, resolved } }]
+            : [],
+      ),
+    );
     // Invalidate reads started before the optimistic mutation.
     refreshVersion.current++;
     setThreads((current) =>
-      current.flatMap((item) =>
+      mergeCommentPages([current, [thread]]).flatMap((item) =>
         item.id !== thread.id ? [item] : resolved === null ? [] : [{ ...item, resolved }],
       ),
     );
@@ -724,9 +913,9 @@ export const CanvasComments = forwardRef<
                     aria-expanded={optionsOpen}
                     disabled={changing || posting}
                     onClick={() => setOptionsOpen((open) => !open)}
-                    className="rounded px-2 text-secondary-ink hover:bg-primary-grey/20"
+                    className="flex size-7 items-center justify-center rounded text-secondary-ink hover:bg-primary-grey/20 disabled:opacity-50"
                   >
-                    …
+                    <Icon name="more" size={16} />
                   </button>
                 </>
               )}
@@ -742,9 +931,9 @@ export const CanvasComments = forwardRef<
                   setOptionsOpen(false);
                   setError("");
                 }}
-                className="rounded px-2 text-lg text-secondary-ink hover:bg-primary-grey/20"
+                className="flex size-7 items-center justify-center rounded text-secondary-ink hover:bg-primary-grey/20"
               >
-                ×
+                <Icon name="xmark" size={16} />
               </button>
             </div>
             {optionsOpen && active && canManageActive && (
@@ -765,17 +954,55 @@ export const CanvasComments = forwardRef<
             )}
           </div>
           {active && (
-            <div className="min-h-0 space-y-3 overflow-y-auto px-3 py-3">
-              {active.messages.map((message) => (
-                <ThreadMessage
-                  key={message.id}
-                  message={message}
-                  fileId={fileId}
-                  viewerId={viewerId}
-                  reactionsAvailable={reactionsAvailable}
-                  refresh={refresh}
-                />
-              ))}
+            <div ref={messageList} className="min-h-0 space-y-3 overflow-y-auto px-3 py-3">
+              {active.messages.map((message) => {
+                const submission = submissions.find(
+                  (item) => item.thread.messages[0].id === message.id,
+                );
+                return (
+                  <div key={message.id}>
+                    <ThreadMessage
+                      message={message}
+                      fileId={fileId}
+                      viewerId={submission && submission.kind !== "sent" ? null : viewerId}
+                      reactionsAvailable={
+                        reactionsAvailable && (!submission || submission.kind === "sent")
+                      }
+                      refresh={refresh}
+                    />
+                    {submission?.kind === "sending" && (
+                      <p role="status" className="ml-9 mt-1 text-xs text-secondary-ink">
+                        Sending…
+                      </p>
+                    )}
+                    {submission?.kind === "failed" && (
+                      <div className="ml-9 mt-1 flex items-center gap-2 text-xs text-danger">
+                        <p role="alert">{submission.error}</p>
+                        <button
+                          type="button"
+                          className="shrink-0 underline"
+                          onClick={() => {
+                            if (
+                              !submissionsRef.current.some(
+                                (item) => item === submission && item.kind === "failed",
+                              )
+                            )
+                              return;
+                            setSubmissions((current) =>
+                              current.map((item) =>
+                                item === submission ? { ...item, kind: "sending" } : item,
+                              ),
+                            );
+                            void send(submission);
+                          }}
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
           {!readOnly && (
@@ -803,7 +1030,7 @@ export const CanvasComments = forwardRef<
                 <button
                   data-ph-public
                   type="button"
-                  disabled={!body.trim() || posting}
+                  disabled={!body.trim()}
                   onClick={() => void post()}
                   className="rounded-md bg-strong-action px-3 py-1.5 text-xs font-medium text-on-strong-action disabled:opacity-40"
                 >
