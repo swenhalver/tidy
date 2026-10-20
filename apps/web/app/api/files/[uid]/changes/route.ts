@@ -8,6 +8,7 @@ import { auth } from "@/lib/auth";
 import { readFileChanges } from "@/lib/design/changes";
 import { commitDocumentPatch } from "@/lib/design/commands";
 import { documentPatchSchema } from "@/lib/design/document-patch";
+import { retryableEditResponse } from "@/lib/design/retryable-edit-response";
 import { realtimeSchemaReady } from "@/lib/realtime/server";
 
 export const runtime = "nodejs";
@@ -65,19 +66,19 @@ export async function POST(request: Request, { params }: RouteContext<"/api/file
   const denied = await operationBudgetResponse("document-request", session.user.id);
   if (denied) return denied;
   const { uid } = await params;
-  const file = await getDesignFile(session.user.id, uid);
-  if (!file) return new Response(null, { status: 404 });
-  if (!can(file.role, "edit"))
-    return Response.json(
-      { error: "Editor access is required to change this design." },
-      { status: 403 },
-    );
-  if (!(await realtimeSchemaReady()))
-    return Response.json(
-      { error: "Live files require the multiplayer migration." },
-      { status: 503 },
-    );
   try {
+    const file = await getDesignFile(session.user.id, uid);
+    if (!file) return new Response(null, { status: 404 });
+    if (!can(file.role, "edit"))
+      return Response.json(
+        { error: "Editor access is required to change this design." },
+        { status: 403 },
+      );
+    if (!(await realtimeSchemaReady()))
+      return Response.json(
+        { error: "Live files require the multiplayer migration." },
+        { status: 503 },
+      );
     const input = inputSchema.parse(
       await (await boundedRequest(request, DOCUMENT_HISTORY_LIMITS.operationBytes)).json(),
     );
@@ -114,6 +115,8 @@ export async function POST(request: Request, { params }: RouteContext<"/api/file
         { status: 410, headers: { "Cache-Control": "private, no-store" } },
       );
     if (error instanceof RequestBodyError) return requestBodyError(error);
+    const retryable = retryableEditResponse(error);
+    if (retryable) return retryable;
     return Response.json(
       { error: error instanceof Error ? error.message : "Could not apply edit." },
       { status: 409 },

@@ -148,3 +148,161 @@ test("cached hover restores resize observation after leaving and returning", asy
     })
     .toBeLessThan(0.2);
 });
+
+for (const failure of [
+  "pointer capture loss",
+  "an intercepted release",
+  "release detected by movement",
+  "release detected by capture loss",
+] as const) {
+  test(`quick drops survive ${failure} and remain undoable once`, async ({ page }) => {
+    await page.goto("/dev/hover-preview");
+    await page.getByRole("button", { name: "Rectangle tool", exact: true }).click();
+    await page.mouse.move(900, 550);
+    await page.mouse.down();
+    await page.mouse.move(1000, 650);
+    await page.mouse.up();
+    await page.getByRole("button", { name: "Select tool", exact: true }).click();
+    const rectangle = page.locator("[data-node-id]").last();
+    const canvas = page.getByLabel("Design canvas", { exact: true });
+    await page.waitForTimeout(300);
+    const before = required(await rectangle.boundingBox());
+    const x = before.x + before.width / 2,
+      y = before.y + before.height / 2;
+    await page.keyboard.down("Control");
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await canvas.evaluate((element, failure) => {
+      if (failure === "pointer capture loss")
+        element.addEventListener(
+          "pointermove",
+          (event) => {
+            if (event instanceof PointerEvent) element.releasePointerCapture(event.pointerId);
+          },
+          { once: true },
+        );
+      else if (failure === "an intercepted release")
+        element.addEventListener("pointerup", (event) => event.stopPropagation(), { once: true });
+      else
+        element.addEventListener(
+          "pointermove",
+          (event) => {
+            if (!(event instanceof PointerEvent)) return;
+            element.dispatchEvent(
+              new PointerEvent(
+                failure === "release detected by movement" ? "pointermove" : "lostpointercapture",
+                {
+                  pointerId: event.pointerId,
+                  clientX: event.clientX + 40,
+                  clientY: event.clientY + 30,
+                  buttons: 0,
+                  ctrlKey: true,
+                  bubbles: true,
+                },
+              ),
+            );
+          },
+          { once: true },
+        );
+    }, failure);
+    await page.mouse.move(x + 40, y + 30);
+    await page.mouse.move(x + 80, y + 60);
+    await page.mouse.up();
+    await page.keyboard.up("Control");
+    await expect
+      .poll(async () => required(await rectangle.boundingBox()).x - before.x)
+      .toBeCloseTo(80, 0);
+    await expect
+      .poll(async () => required(await rectangle.boundingBox()).y - before.y)
+      .toBeCloseTo(60, 0);
+    await canvas.focus();
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect
+      .poll(async () => required(await rectangle.boundingBox()).x - before.x)
+      .toBeCloseTo(0, 0);
+  });
+}
+
+test("quick selection and release keep the drop under the pointer while the inspector opens", async ({
+  page,
+}) => {
+  await page.goto("/dev/hover-preview");
+  await page.getByRole("button", { name: "Rectangle tool", exact: true }).click();
+  await page.mouse.move(900, 550);
+  await page.mouse.down();
+  await page.mouse.move(1000, 650);
+  await page.mouse.up();
+  await page.getByRole("button", { name: "Select tool", exact: true }).click();
+  const rectangle = page.locator("[data-node-id]").last();
+  await rectangle.waitFor();
+  await page.getByRole("button", { name: "Minimize editor panels", exact: true }).click();
+  await page.getByLabel("Design canvas", { exact: true }).focus();
+  for (let i = 0; i < 3; i++) await page.keyboard.press("Escape");
+  await expect(page.locator('[data-kind="inspector"]')).toHaveAttribute("data-open", "false");
+  await page.waitForTimeout(350);
+  const before = required(await rectangle.boundingBox());
+  const x = before.x + before.width / 2,
+    y = before.y + before.height / 2;
+  await page.keyboard.down("Control");
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x - 60, y - 40);
+  await page.mouse.up();
+  await page.keyboard.up("Control");
+  await expect(page.locator('[data-kind="inspector"]')).toHaveAttribute("data-open", "true");
+  await page.waitForTimeout(350);
+  const after = required(await rectangle.boundingBox());
+  expect(after.x - before.x).toBeCloseTo(-60, 0);
+  expect(after.y - before.y).toBeCloseTo(-40, 0);
+});
+
+test("selection inspector cycles do not drift artwork while explicit resizes preserve its center", async ({
+  page,
+}) => {
+  await page.goto("/dev/hover-preview");
+  const card = page.locator('[data-node-id="hover-card"]');
+  const canvas = page.getByLabel("Design canvas", { exact: true });
+  const inspector = page.locator('[data-kind="inspector"]');
+  await page.getByRole("button", { name: "Minimize editor panels", exact: true }).click();
+  await page.waitForTimeout(350);
+  const before = required(await card.boundingBox());
+  for (let i = 0; i < 4; i++) {
+    await card.click({ position: { x: 12, y: 12 } });
+    await expect(inspector).toHaveAttribute("data-open", "true");
+    await page.waitForTimeout(i % 2 ? 40 : 350);
+    expect(required(await card.boundingBox()).x).toBeCloseTo(before.x, 1);
+    if (i % 2) await page.mouse.click(20, 700);
+    else {
+      await canvas.focus();
+      await page.keyboard.press("Escape");
+    }
+    await expect(inspector).toHaveAttribute("data-open", "false");
+    await page.waitForTimeout(350);
+    expect(required(await card.boundingBox()).x).toBeCloseTo(before.x, 1);
+  }
+  const offset = async () => {
+    const node = required(await card.boundingBox());
+    const viewport = required(await canvas.boundingBox());
+    return {
+      x: node.x - viewport.x - viewport.width / 2,
+      y: node.y - viewport.y - viewport.height / 2,
+    };
+  };
+  const centered = await offset();
+  for (const name of ["Expand editor panels", "Minimize editor panels"]) {
+    await page.getByRole("button", { name, exact: true }).click();
+    await page.waitForTimeout(350);
+    expect((await offset()).x).toBeCloseTo(centered.x, 1);
+  }
+  for (const width of [1320, 700, 660, 1320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(100);
+    const resized = await offset();
+    expect(resized.x).toBeCloseTo(centered.x, 1);
+    expect(resized.y).toBeCloseTo(centered.y, 1);
+    if (width === 700) {
+      await card.click({ position: { x: 12, y: 12 } });
+      await expect(inspector).toHaveAttribute("data-open", "true");
+    }
+  }
+});
