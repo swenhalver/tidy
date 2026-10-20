@@ -1,4 +1,5 @@
 import { operationBudgetResponse } from "@/lib/security/operation-budget";
+import { MCP_REQUEST_LIMITS } from "@/lib/security/resource-limits";
 import { requireMcpAuth } from "@better-auth/mcp";
 import { createResourceServerChallenge } from "@better-auth/oauth-provider";
 import { APIError } from "better-auth/api";
@@ -25,6 +26,7 @@ const resource = new URL(
 // Ask for design editing at consent; read-only grants still authorize reads.
 const connectionScopes = ["mcp:read", "mcp:write"];
 
+/** Create a server whose tools, validation budget, and authority belong to one request. */
 function buildServer(userId: string, clientId: string, grant: McpGrant) {
   const activity = new McpActivity({ userId, clientId });
   return registerTidyTools(
@@ -34,6 +36,7 @@ function buildServer(userId: string, clientId: string, grant: McpGrant) {
           new McpServer(
             { name: "Tidy canvas", version: "0.1.0" },
             {
+              maxToolInputElements: MCP_REQUEST_LIMITS.toolInputElements,
               cacheHints: {
                 "tools/list": { ttlMs: 300_000, cacheScope: "private" },
                 "resources/list": { ttlMs: 300_000, cacheScope: "private" },
@@ -62,14 +65,18 @@ function buildServer(userId: string, clientId: string, grant: McpGrant) {
   );
 }
 
-// The handler is shared; the SDK still constructs a fresh server and transport
-// for each request. Actor closures and grants never survive their request.
-const mcpHandler = createMcpHandler(() => {
-  const grant = currentMcpGrant();
-  if (!grant) throw new Error("Missing authenticated MCP context.");
-  return buildServer(grant.claims.sub as string, grant.claims.client_id as string, grant);
-});
+/** Share dispatch while constructing a fresh server and transport for each request's grant. */
+const mcpHandler = createMcpHandler(
+  /** Resolve the current request's verified grant before constructing its isolated server. */
+  () => {
+    const grant = currentMcpGrant();
+    if (!grant) throw new Error("Missing authenticated MCP context.");
+    return buildServer(grant.claims.sub as string, grant.claims.client_id as string, grant);
+  },
+  { maxRequestBodySize: MCP_REQUEST_LIMITS.bodyBytes },
+);
 
+/** Return an authorization challenge or a retryable verification error when a grant is unusable. */
 async function grantFailure(
   claims: Record<string, unknown>,
   scopes: readonly string[] = ["mcp:read"],
@@ -99,6 +106,7 @@ async function grantFailure(
   );
 }
 
+/** Authenticate, bound, and authorize each message before dispatching it in its own grant context. */
 const authenticatedPost = requireMcpAuth(
   auth,
   async (request, claims) => {
@@ -137,6 +145,7 @@ const authenticatedPost = requireMcpAuth(
   { resource, requiredScopes: ["mcp:read"], challengeScopes: connectionScopes },
 );
 
+/** Bind MCP authentication and dispatch to the incoming request's cancellation signal and trace. */
 export function POST(request: Request) {
   return runWithRequestSignal(request.signal, () =>
     traceOperation("mcp.request", () => authenticatedPost(request)),

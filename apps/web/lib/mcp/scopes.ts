@@ -1,3 +1,5 @@
+import { MCP_REQUEST_LIMITS } from "@/lib/security/resource-limits";
+
 const readTools = new Set([
   "list_organizations",
   "list_files",
@@ -38,6 +40,7 @@ const readMethods = new Set([
   "notifications/progress",
 ]);
 
+/** Derive required scopes from a single message, treating unknown tools as write operations. */
 export function requiredMcpScopes(message: unknown): readonly string[] {
   if (!message || typeof message !== "object" || Array.isArray(message))
     throw new Error("Send one JSON-RPC message.");
@@ -65,6 +68,7 @@ export function requiredMcpScopes(message: unknown): readonly string[] {
     : ["mcp:read", "mcp:write"];
 }
 
+/** Read one JSON-RPC message within the shared byte limit and deadline, preserving it for dispatch. */
 export async function readMcpRequest(request: Request) {
   const reader = request.body?.getReader();
   if (!reader) throw new Error("A JSON-RPC request body is required.");
@@ -77,7 +81,7 @@ export async function readMcpRequest(request: Request) {
       const { value, done } = await waitForSignal(reader.read(), signal);
       if (done) break;
       size += value.byteLength;
-      if (size > 4 * 1024 * 1024) throw new Error("The MCP request is too large.");
+      if (size > MCP_REQUEST_LIMITS.bodyBytes) throw new Error("The MCP request is too large.");
       chunks.push(value);
     }
     const body = new Uint8Array(size);
