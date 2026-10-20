@@ -95,7 +95,9 @@ export async function handleRequest<T extends Request>(
       streaming =
         response.status !== 101 &&
         response.body !== null &&
-        (type === "text/html" || type === "text/x-component");
+        (type === "text/html" ||
+          type === "text/x-component" ||
+          (request.method === "POST" && new URL(request.url).pathname === "/api/files/thumbnails"));
       if (!streaming) return response;
       const finishBody = startRequestPhase("body");
       const reader = response.body!.getReader();

@@ -122,6 +122,7 @@ async function observeTracedRequest(
       response.body !== null &&
       ((request.method === "GET" &&
         (contentType === "text/html" || contentType === "text/x-component")) ||
+        (request.method === "POST" && details.route === "/api/files/thumbnails") ||
         (request.method === "POST" &&
           details.route === "/api/mcp" &&
           contentType === "text/event-stream"));

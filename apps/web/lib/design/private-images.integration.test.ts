@@ -3,10 +3,12 @@ import { createHash } from "node:crypto";
 import { Client } from "pg";
 import { db } from "../db";
 import { runWithRequestSignal } from "../request-lifecycle";
+import { decodeThumbnailParts } from "./thumbnail-batch";
 import { blankDesignDocument } from "./document";
 mock.module("server-only", () => ({}));
 const { uploadThumbnailForUser, thumbnailResponseForUser } = await import("./thumbnail-service");
 const { assetResponseForUser } = await import("./asset-response");
+const { thumbnailBatchResponseForUser } = await import("./thumbnail-batch-service");
 
 const testUrl = process.env.IMAGES_TEST_DATABASE_URL,
   setupUrl = process.env.IMAGES_SETUP_DATABASE_URL;
@@ -632,3 +634,84 @@ for (const kind of ["asset", "thumbnail"] as const) {
     );
   }
 }
+
+integration(
+  "thumbnail batching preserves account and workspace quota checks for every image",
+  async () => {
+    const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+    const context = globals[symbol] as { env: Record<string, unknown> };
+    let consumed = 0;
+    context.env.BETTER_AUTH_SECRET = "private-images-test-budget-secret-at-least-32-characters";
+    context.env.AUTH_GUARD = {
+      idFromName: (name: string) => name,
+      get: () => ({
+        consume: async () => {
+          consumed++;
+          return { allowed: true, batchSupported: true };
+        },
+      }),
+    };
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: { userAgent: "Cloudflare-Workers" },
+    });
+    try {
+      const response = await thumbnailBatchResponseForUser(
+        "viewer",
+        {
+          thumbnails: Array.from({ length: 9 }, () => ({ uid: "file", version })),
+        },
+        new Request("https://app.example/api/files/thumbnails"),
+      );
+      const parts = await Array.fromAsync(decodeThumbnailParts(response));
+      expect(parts.map((item) => item.status)).toEqual(Array(9).fill(200));
+      expect(consumed).toBe(18);
+    } finally {
+      if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+      else Reflect.deleteProperty(globalThis, "navigator");
+    }
+  },
+);
+
+integration(
+  "batch discovery cannot authorize an image after membership changes during admission",
+  async () => {
+    const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+    const context = globals[symbol] as { env: Record<string, unknown> };
+    const pause = paused();
+    let consumed = 0;
+    context.env.BETTER_AUTH_SECRET = "private-images-test-budget-secret-at-least-32-characters";
+    context.env.AUTH_GUARD = {
+      idFromName: (name: string) => name,
+      get: () => ({
+        consume: async () => {
+          consumed++;
+          if (consumed === 1) await pause.hook();
+          return { allowed: true, batchSupported: true };
+        },
+      }),
+    };
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: { userAgent: "Cloudflare-Workers" },
+    });
+    try {
+      const response = await thumbnailBatchResponseForUser(
+        "viewer",
+        { thumbnails: [{ uid: "file", version }] },
+        new Request("https://app.example/api/files/thumbnails"),
+      );
+      const parts = Array.fromAsync(decodeThumbnailParts(response));
+      await pause.entered;
+      await admin.query("set lock_timeout='500ms'");
+      await admin.query(`delete from "member" where "id"='view'`);
+      pause.release();
+      expect((await parts)[0]!.status).toBe(404);
+      expect(gets + cacheReads).toBe(0);
+    } finally {
+      pause.release();
+      if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+      else Reflect.deleteProperty(globalThis, "navigator");
+    }
+  },
+);

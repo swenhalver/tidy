@@ -7,6 +7,7 @@ const staticSegments = new Set([
   "files",
   "health",
   "snapshot",
+  "thumbnails",
   "changes",
   "assets",
   "comments",

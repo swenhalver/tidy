@@ -13,6 +13,7 @@ export async function withPrivateImageAccess<T>(
   kind: "asset" | "thumbnail",
   version: string | null,
   work: (client: PoolClient, image: StoredImage & { organizationId: string }) => Promise<T>,
+  discoveredOrganizationId?: string | null,
 ): Promise<T | null> {
   if (!id || id.length > 120 || (version !== null && version.length > 512)) return null;
   const sql =
@@ -26,24 +27,29 @@ export async function withPrivateImageAccess<T>(
       join "member" m on m."organizationId"=f."organizationId" and m."userId"=$2 and m."role" in ${VIEW_ROLES_SQL}
       join "user" u on u."id"=m."userId" and u."emailVerified"=true
       where f."id"=$1 and ($3::text is null or t."version"=$3) and ($4::text is null or f."organizationId"=$4)`;
-  const discovered = await db.query<StoredImage & { organizationId: string }>(sql, [
-    id,
-    userId,
-    version,
-    null,
-  ]);
-  if (discovered.rows.length !== 1) return null;
-  const organizationId = discovered.rows[0]!.organizationId;
+  // Batch discovery is a hint for admission, never authority to return bytes.
+  let organizationId = discoveredOrganizationId;
+  if (organizationId === undefined) {
+    const discovered = await db.query<StoredImage & { organizationId: string }>(sql, [
+      id,
+      userId,
+      version,
+      null,
+    ]);
+    organizationId = discovered.rows.length === 1 ? discovered.rows[0]!.organizationId : null;
+  }
+  if (organizationId === null) return null;
+  const admittedOrganizationId = organizationId;
   return withImageReadCapacity(async () => {
     // Local overload must not consume persistent quota again on every retry.
     // Admission still precedes locks, and authority is rechecked below.
-    await reserveImageOperation("read", userId, organizationId);
+    await reserveImageOperation("read", userId, admittedOrganizationId);
     const client = await db.connect();
     try {
       await client.query("begin");
       const access = await client.query<StoredImage & { organizationId: string }>(
         `${sql} for share of ${kind === "asset" ? "a,m,u" : "t,f,m,u"}`,
-        [id, userId, version, organizationId],
+        [id, userId, version, admittedOrganizationId],
       );
       const value = access.rows.length === 1 ? await work(client, access.rows[0]!) : null;
       await client.query("commit");

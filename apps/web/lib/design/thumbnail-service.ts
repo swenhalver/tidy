@@ -16,11 +16,20 @@ const response = (status: number) =>
   new Response(null, { status, headers: { "Cache-Control": "private, no-store" } });
 class ThumbnailChangedError extends Error {}
 
-export async function thumbnailResponseForUser(userId: string, uid: string, request: Request) {
+export async function thumbnailResponseForUser(
+  userId: string,
+  uid: string,
+  request: Request,
+  discoveredOrganizationId?: string | null,
+) {
   const version = new URL(request.url).searchParams.get("version");
   try {
-    return (
-      (await withPrivateImageAccess(userId, uid, "thumbnail", version, (client, image) =>
+    const result = await withPrivateImageAccess(
+      userId,
+      uid,
+      "thumbnail",
+      version,
+      (client, image) =>
         designImageResponse(
           image,
           async () =>
@@ -32,8 +41,9 @@ export async function thumbnailResponseForUser(userId: string, uid: string, requ
             ).rows[0]?.body ?? null,
           request,
         ),
-      )) ?? response(404)
+      discoveredOrganizationId,
     );
+    return !result || (result.status === 503 && result.body === null) ? response(404) : result;
   } catch (error) {
     return imageFailureResponse(error);
   }
