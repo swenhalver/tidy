@@ -251,6 +251,47 @@ packaged apps also include the project licence, bundled notices and font licence
 process, using only synthetic projects and fixture harnesses. On headless Linux,
 run it with `xvfb-run --auto-servernum`.
 
+## Local macOS release candidate
+
+Desktop versions are independent of the web app. `package.json` owns the SemVer
+version (initially `0.1.0-beta.1`) and `desktopBuildNumber`, a numeric string that
+must increase for each published desktop release. macOS bundle metadata uses the
+numeric release version and build number; About and harness clients retain the
+full beta version. Use tags such as `desktop-v0.1.0-beta.1` when publishing.
+
+Install a Developer ID Application signing identity and validate a notarization
+Keychain profile using `xcrun notarytool store-credentials`. Then run from the root:
+
+```sh
+TIDY_MAC_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+TIDY_NOTARY_PROFILE="your-notarization-profile" \
+bun run release:desktop:mac
+```
+
+This opt-in command builds for the current Mac's architecture. It applies the
+existing security fuses, signs with Hardened Runtime and the JIT entitlement,
+notarizes and staples the app, then creates a signed, notarized and stapled DMG
+with an Applications shortcut. It verifies signatures, tickets and Gatekeeper
+acceptance and writes a SHA-256 sidecar in `apps/desktop/release/`. Keychain may
+prompt to authorize the signing key. No private keys or passwords are exported.
+
+Notarization uploads the compiled app and DMG to Apple. Submission IDs are printed
+before waiting (up to 15 minutes for each submission). If Apple takes longer,
+inspect the submission with `xcrun notarytool info <id> --keychain-profile <profile>`;
+an incomplete or rejected run is not a verified release candidate.
+
+If app notarization has completed and the app is already stapled, append `--resume`
+to retry only the DMG stage without rebuilding or re-uploading the app. This
+requires the existing app's version/build metadata, signature, notarization ticket
+and Gatekeeper assessment to pass. Keep the source and build number unchanged.
+
+The command does not publish, install, or deploy anything. Test the DMG on another
+Mac before public distribution. The [desktop beta release workflow](RELEASING.md)
+can automate signing and publishing after merges to `main` once its environment
+is configured and enabled. These betas use manual updates; automatic updates and
+website download links are separate work. Existing `package:desktop` remains an
+unsigned local development package, including in pull-request CI.
+
 ## Shared foundations
 
 - Branding uses the same `TidyLogo` from `@tidy/ui/tidy-logo` as the web app.
