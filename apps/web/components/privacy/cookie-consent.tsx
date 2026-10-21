@@ -3,7 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { usePathname } from "next/navigation";
-import { loadMcpChoice, recordMcpChoice } from "@/lib/privacy/mcp-choice-client";
+import {
+  loadMcpChoice,
+  pendingMcpWithdrawal,
+  recordMcpChoice,
+} from "@/lib/privacy/mcp-choice-client";
 import { privacyPolicyUrl } from "@/lib/privacy-notice";
 import { recordBrowserConsent, recordBrowserWithdrawal } from "@/lib/privacy/receipt-client";
 import { browserCollectionEnabled } from "@/lib/posthog-client";
@@ -11,6 +15,7 @@ import { useErrorNotice } from "@/lib/use-error-notice";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { SelectMenu } from "@/components/ui/select-menu";
+import { EditorNotification } from "@tidy/editor/editor/editor-notification";
 import { McpAnalyticsChoice } from "./mcp-analytics-choice";
 import {
   browserConsent,
@@ -43,6 +48,8 @@ const purposes: { key: ConsentPurpose; title: string; description: string }[] = 
 ];
 const actionClass =
   "flex min-h-11 flex-1 items-center justify-center rounded-lg border border-border bg-surface px-4 py-3 text-sm font-medium text-ink hover:bg-hover-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink";
+const confirmationPending =
+  "Your privacy choices could not all be confirmed; server confirmation is pending. MCP changes take effect only after confirmation. Retry recording your choices.";
 
 export function CookieConsent() {
   const id = "privacy-choices-dialog";
@@ -59,14 +66,13 @@ export function CookieConsent() {
   const [mcpEnabled, setMcpEnabled] = useState(false);
   const [mcpLoading, setMcpLoading] = useState(true);
   const [mcpError, setMcpError] = useState(false);
-  const [pending, setPending] = useState(false);
   const [, setChoiceError] = useErrorNotice("", "user_action", "inline");
   const [, setMcpNotice] = useErrorNotice("", "user_action", "inline");
   const mcpGeneration = useRef(0);
   const pendingRef = useRef(false);
   const retryMcp = useRef<boolean | undefined>(undefined);
   const refreshMcp = useCallback(() => {
-    if (pendingRef.current) return;
+    if (pendingRef.current || retryMcp.current !== undefined) return;
     const generation = ++mcpGeneration.current;
     return loadMcpChoice()
       .then(
@@ -79,7 +85,13 @@ export function CookieConsent() {
         },
         (cause) => {
           if (generation === mcpGeneration.current) {
-            setMcpError(true);
+            if (pendingMcpWithdrawal()) {
+              retryMcp.current = false;
+              setMcpEnabled(false);
+              setNeedsRetry(true);
+              setMessage(confirmationPending);
+              setMcpError(false);
+            } else setMcpError(true);
             setMcpNotice(cause, "Could not check your MCP privacy choice.");
           }
         },
@@ -123,14 +135,21 @@ export function CookieConsent() {
     };
   }, []);
   async function choose(next: ConsentChoices, close = false, mcp?: boolean) {
-    if (pendingRef.current) return;
     const notifyError = setChoiceError("");
     pendingRef.current = true;
     const generation = ++choiceGeneration.current;
-    if (mcp !== undefined) ++mcpGeneration.current;
-    retryMcp.current = mcp;
+    // Carry an unconfirmed MCP choice through subsequent browser-only edits.
+    const mcpChoice = mcp ?? retryMcp.current;
+    retryMcp.current = mcpChoice;
+    if (mcpChoice !== undefined) {
+      ++mcpGeneration.current;
+      setMcpEnabled(mcpChoice);
+      setMcpLoading(false);
+      setMcpError(false);
+    }
+    // Close in the click handler; neither server confirmation may block the UI.
+    if (close) dialog.current?.close();
     setNeedsRetry(false);
-    setPending(true);
     const current = browserConsent();
     const unchanged =
       current &&
@@ -149,7 +168,7 @@ export function CookieConsent() {
       // must never prevent an explicit MCP withdrawal (or vice versa).
       const [browserResult, mcpResult] = await Promise.allSettled([
         remembered ? recordBrowserConsent() : recordBrowserWithdrawal(),
-        mcp === undefined ? Promise.resolve(undefined) : recordMcpChoice(mcp),
+        mcpChoice === undefined ? Promise.resolve(undefined) : recordMcpChoice(mcpChoice),
       ]);
       if (
         mcpResult.status === "fulfilled" &&
@@ -167,19 +186,16 @@ export function CookieConsent() {
       if (failures.length === 1) throw failures[0];
       if (failures.length > 1)
         throw new AggregateError(failures, "Privacy choice confirmation failed");
-      if (close && generation === choiceGeneration.current) dialog.current?.close();
+      if (generation === choiceGeneration.current) retryMcp.current = undefined;
     } catch (cause) {
       if (generation !== choiceGeneration.current) return;
       notifyError(cause, "Your privacy choices could not all be confirmed. Please retry.");
       setNeedsRetry(true);
-      setMessage(
-        "Your privacy choices could not all be confirmed. Please retry. Browser and MCP choices are applied only when their server confirmation succeeds.",
-      );
+      setMessage(confirmationPending);
     } finally {
       if (generation === choiceGeneration.current) {
         pendingRef.current = false;
-        setPending(false);
-        if (mcp !== undefined) setMcpLoading(false);
+        if (mcpChoice !== undefined) setMcpLoading(false);
       }
     }
   }
@@ -190,7 +206,6 @@ export function CookieConsent() {
           <span className="text-sm font-semibold">{title}</span>
           <SelectMenu
             replayOptions
-            disabled={pending}
             label={title}
             value={choices[key] ? "on" : "off"}
             options={[
@@ -205,7 +220,11 @@ export function CookieConsent() {
     );
   }
   return (
-    <aside data-ph-public-label className="ph-no-capture" aria-label="Privacy choices">
+    <aside
+      data-ph-public-label
+      className="ph-no-capture group/privacy"
+      aria-label="Privacy choices"
+    >
       <Dialog
         ref={dialog}
         id={id}
@@ -213,6 +232,7 @@ export function CookieConsent() {
         aria-labelledby={`${id}-title`}
         aria-describedby={`${id}-description`}
         onClose={() => {
+          if (dialog.current?.open) return;
           if (trigger.current?.isConnected) trigger.current.focus();
         }}
       >
@@ -272,7 +292,7 @@ export function CookieConsent() {
                 purposes.filter(({ key }) => key === "diagnostics").map(renderPurpose)}
               <McpAnalyticsChoice
                 enabled={mcpEnabled}
-                pending={pending || mcpLoading}
+                pending={mcpLoading}
                 onChange={(enabled) => void choose(choices, false, enabled)}
               />
               {mcpError && (
@@ -295,7 +315,6 @@ export function CookieConsent() {
           <Button
             type="button"
             variant="text"
-            disabled={pending}
             onClick={() => choose(choices, false, retryMcp.current)}
           >
             <span data-ph-public style={{ display: "contents" }}>
@@ -307,7 +326,6 @@ export function CookieConsent() {
           <Button
             type="button"
             className={actionClass}
-            disabled={pending}
             onClick={() => choose(ESSENTIAL_ONLY, true, false)}
           >
             <span data-ph-public style={{ display: "contents" }}>
@@ -317,7 +335,6 @@ export function CookieConsent() {
           <Button
             type="button"
             className={actionClass}
-            disabled={pending}
             onClick={() =>
               choose(
                 {
@@ -347,6 +364,25 @@ export function CookieConsent() {
           </Button>
         )}
       </Dialog>
+      {needsRetry && (
+        <div className="fixed right-4 bottom-4 z-50 max-w-sm group-has-[dialog[open]]/privacy:hidden">
+          <EditorNotification
+            message={message}
+            onDismiss={() => {
+              setNeedsRetry(false);
+              setMessage("");
+            }}
+          >
+            <Button
+              type="button"
+              variant="text"
+              onClick={() => choose(choices, false, retryMcp.current)}
+            >
+              Retry recording choice
+            </Button>
+          </EditorNotification>
+        </div>
+      )}
     </aside>
   );
 }
