@@ -2837,6 +2837,12 @@ export function FileEditor({
       y = Math.min(...all.map((p) => p.y));
     const width = Math.max(1, Math.max(...all.map((p) => p.x)) - x),
       height = Math.max(1, Math.max(...all.map((p) => p.y)) - y);
+    if (width > 5000 || height > 5000) {
+      setError(
+        "The path and its curve handles must fit within 5,000 × 5,000 canvas units. Press Backspace to remove the last point, then try again.",
+      );
+      return false;
+    }
     const shift = (p: Point) => ({ x: p.x - x, y: p.y - y });
     const contours = [
       {
@@ -2892,6 +2898,7 @@ export function FileEditor({
     }, id);
     setTool("select");
     setVectorMode(id);
+    return true;
   }
 
   function beginCanvasGesture(event: PointerEvent<HTMLDivElement>) {

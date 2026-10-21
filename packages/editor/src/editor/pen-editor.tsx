@@ -27,7 +27,7 @@ export function PenEditor({
   view: { x: number; y: number; zoom: number };
   pageId: string;
   spaceHeld: boolean;
-  onFinish: (contour: VectorContour, parentId: string | null, pageId: string) => void;
+  onFinish: (contour: VectorContour, parentId: string | null, pageId: string) => boolean;
   onCancel: () => void;
 }) {
   const [points, setPoints] = useState<VectorAnchor[]>([]);
@@ -40,13 +40,14 @@ export function PenEditor({
   const finish = useEditorEvent((closed: boolean) => {
     if (!draft.current || draft.current.points.length < 2) return;
     const value = draft.current;
-    draft.current = null;
     active.current = null;
-    onFinish(
+    const finished = onFinish(
       { id: crypto.randomUUID(), points: value.points, closed },
       value.parentId,
       value.pageId,
     );
+    if (finished) draft.current = null;
+    else viewport.current?.focus({ preventScroll: true });
   });
   const keys = useEditorEvent((event: KeyboardEvent) => {
     if (
