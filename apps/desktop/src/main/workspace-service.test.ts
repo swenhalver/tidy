@@ -13,7 +13,10 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
-async function fixture() {
+/** Create an isolated workspace with fake harnesses and injectable settings validation. */
+async function fixture(
+  configure: ConstructorParameters<typeof WorkspaceService>[3] = async () => {},
+) {
   const directory = await mkdtemp(join(tmpdir(), "tidy-workspace-"));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const store = new ProjectStore(join(directory, "app"));
@@ -55,7 +58,7 @@ async function fixture() {
       };
     },
     async () => "/fixture/harness",
-    async () => {},
+    configure,
   );
   cleanups.push(() => service.close());
   return { directory, store, service, project: snapshot.project, runs };
@@ -73,6 +76,226 @@ function finished(service: WorkspaceService, threadId: string) {
       }
     });
   });
+}
+
+test("update preparation checkpoints a running harness and can reopen the workspace after restart fails", async () => {
+  const { service, store, project, runs } = await fixture();
+  const thread = await service.startThread({
+    projectId: project.id,
+    harness: "claude",
+    prompt: "Before update",
+    designIds: [],
+  });
+  runs[0].input.onUpdate({ type: "message", id: "reply", text: "Persist this reply" });
+  const restore = await service.prepareUpdate();
+  expect(runs[0].stopped).toBe(true);
+  const saved = await store.readThread(project.id, thread.id);
+  expect(saved.status).not.toBe("running");
+  expect(saved.messages.some((message) => message.text === "Persist this reply")).toBe(true);
+  await expect(
+    service.startThread({
+      projectId: project.id,
+      harness: "claude",
+      prompt: "Blocked during update",
+      designIds: [],
+    }),
+  ).rejects.toThrow("closing");
+  restore();
+  const next = await service.startThread({
+    projectId: project.id,
+    harness: "claude",
+    prompt: "Continue after failure",
+    designIds: [],
+  });
+  expect(next.status).toBe("running");
+  expect(runs.length).toBe(2);
+});
+
+test("a failed update flush releases the workspace instead of leaving it permanently closed", async () => {
+  const { service, store, project } = await fixture();
+  const flush = store.flush.bind(store);
+  store.flush = () => Promise.reject(new Error("disk failure"));
+  try {
+    await expect(service.prepareUpdate()).rejects.toThrow("disk failure");
+  } finally {
+    store.flush = flush;
+  }
+  const thread = await service.startThread({
+    projectId: project.id,
+    harness: "claude",
+    prompt: "Still usable",
+    designIds: [],
+  });
+  expect(thread.status).toBe("running");
+});
+
+for (const fails of [false, true]) {
+  test(`ordinary quit keeps work blocked when pending update preparation ${fails ? "fails" : "recovers"}`, async () => {
+    const { service, store, project, runs } = await fixture();
+    const originalFlush = store.flush.bind(store);
+    let finishUpdate!: () => void;
+    let failUpdate!: (error: Error) => void;
+    let finishQuit!: () => void;
+    let enteredUpdate!: () => void;
+    let enteredQuit!: () => void;
+    const updateEntered = new Promise<void>((resolve) => {
+      enteredUpdate = resolve;
+    });
+    const quitEntered = new Promise<void>((resolve) => {
+      enteredQuit = resolve;
+    });
+    const updateFlush = new Promise<void>((resolve, reject) => {
+      finishUpdate = resolve;
+      failUpdate = reject;
+    });
+    const quitFlush = new Promise<void>((resolve) => {
+      finishQuit = resolve;
+    });
+    let flushes = 0;
+    store.flush = () => {
+      if (++flushes === 1) {
+        enteredUpdate();
+        return updateFlush;
+      }
+      enteredQuit();
+      return quitFlush;
+    };
+    const preparing = service.prepareUpdate().then(
+      (restore) => ({ restore }),
+      (error: unknown) => ({ error }),
+    );
+    await updateEntered;
+    const quitting = service.close();
+    try {
+      await quitEntered;
+      if (fails) failUpdate(new Error("update flush failed"));
+      else finishUpdate();
+      const prepared = await preparing;
+      if ("restore" in prepared) prepared.restore();
+      else expect(String(prepared.error)).toContain("update flush failed");
+      await expect(
+        service.startThread({
+          projectId: project.id,
+          harness: "claude",
+          prompt: "Must stay blocked",
+          designIds: [],
+        }),
+      ).rejects.toThrow("closing");
+      expect(runs.length).toBe(0);
+      finishQuit();
+      await quitting;
+      await expect(service.prepareUpdate()).rejects.toThrow("closing");
+    } finally {
+      finishUpdate();
+      finishQuit();
+      store.flush = originalFlush;
+      await preparing;
+      await quitting;
+    }
+  });
+}
+
+test("an old update recovery callback cannot release a newer preparation", async () => {
+  const { service, project } = await fixture();
+  const first = await service.prepareUpdate();
+  first();
+  const second = await service.prepareUpdate();
+  first();
+  await expect(
+    service.startThread({
+      projectId: project.id,
+      harness: "claude",
+      prompt: "Still updating",
+      designIds: [],
+    }),
+  ).rejects.toThrow("closing");
+  second();
+  const thread = await service.startThread({
+    projectId: project.id,
+    harness: "claude",
+    prompt: "Recovered",
+    designIds: [],
+  });
+  expect(thread.status).toBe("running");
+});
+
+for (const shutdown of ["update", "quit"] as const) {
+  for (const stage of ["done read", "settings read", "settings validation"] as const) {
+    test(`${shutdown} rejects metadata writes delayed at ${stage}`, async () => {
+      let paused = false;
+      let enter!: () => void;
+      let release!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const { service, store, project, runs } = await fixture(async () => {
+        if (paused && stage === "settings validation") {
+          enter();
+          await gate;
+        }
+      });
+      const thread = await service.startThread({
+        projectId: project.id,
+        harness: "claude",
+        prompt: "Existing thread",
+        designIds: [],
+      });
+      const completed = finished(service, thread.id);
+      runs[0].complete();
+      await completed;
+      await store.flush();
+      const before = await store.readThread(project.id, thread.id);
+      const read = store.readThread.bind(store);
+      const write = store.writeThread.bind(store);
+      let writes = 0;
+      store.readThread = async (...args) => {
+        const value = await read(...args);
+        if (paused && stage !== "settings validation") {
+          enter();
+          await gate;
+        }
+        return value;
+      };
+      store.writeThread = (value) => {
+        writes++;
+        return write(value);
+      };
+      paused = true;
+      const edit = (
+        stage === "done read"
+          ? service.setThreadDone(project.id, thread.id, true)
+          : service.setThreadSettings(project.id, thread.id, { model: "new-model" })
+      ).then(
+        (value) => value,
+        (error: unknown) => error,
+      );
+      let restore: (() => void) | undefined;
+      try {
+        await entered;
+        if (shutdown === "update") restore = await service.prepareUpdate();
+        else await service.close();
+        release();
+        expect(String(await edit)).toContain("closing");
+        expect(writes).toBe(0);
+        expect(await read(project.id, thread.id)).toEqual(before);
+        paused = false;
+        if (restore) {
+          restore();
+          // Rejection must also release the per-thread guard so retry remains usable.
+          expect((await service.setThreadDone(project.id, thread.id, true)).doneAt).toBeDefined();
+        }
+      } finally {
+        release();
+        await edit;
+        store.readThread = read;
+        store.writeThread = write;
+        restore?.();
+      }
+    });
+  }
 }
 
 test("design references reach the harness and follow-up messages resume the same session", async () => {

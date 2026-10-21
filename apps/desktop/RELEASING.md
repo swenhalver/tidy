@@ -55,12 +55,78 @@ Each published GitHub prerelease contains exactly:
 
 - `Tidy-<version>-mac-arm64.dmg`: signed, notarized, stapled installer.
 - `Tidy-<version>-mac-arm64.dmg.sha256`: SHA-256 checksum of the final DMG.
+- `Tidy-<version>-mac-arm64.zip`: ZIP of the final signed, notarized, stapled app.
+- `Tidy-<version>-mac-arm64.zip.sha256`: SHA-256 checksum of the update ZIP.
+- `desktop-update-arm64.json`: Electron/Squirrel feed pointing to that release's ZIP.
 - `desktop-release.json`: schema version, beta channel, app/build versions, tag,
-  source commit, workflow run, release URL and platform download URL/hash/size.
+  source commit, workflow run, release URL, installer and update URL/hash/size.
 
-These are direct downloads; no TestFlight or App Store listing is needed. The
-application currently uses manual updates. An installed-app updater, Intel/Windows/
-Linux installers, and website/sidebar UI are separate changes.
+These are direct downloads; no TestFlight or App Store listing is needed.
+Intel/Windows/Linux installers remain separate work.
+
+## In-app updates
+
+Installed Apple Silicon macOS apps check the public `tidydesigns/tidy` GitHub releases API at
+startup and every 30 minutes. Discovery reads up to three pages of 100 releases,
+ignores drafts, unrelated tags, incomplete assets and other architectures, and
+selects the highest compatible version rather than the last publication. Beta
+installs can receive newer betas or stable releases; stable installs ignore betas.
+Failed checks and downloads retry on the next interval without interrupting work;
+the sidebar also offers an immediate retry using the same update control.
+Discovery caches each page's ETag and parsed releases for conditional requests.
+GitHub rate-limit responses quietly defer checks, including manual retries, until
+the server's retry/reset deadline or an increasing backoff of at least 30 minutes.
+An app restart clears this in-memory cache and backoff. Unauthenticated requests
+still share GitHub's public-IP quota, so large shared networks can delay discovery.
+Intel builds remain disabled until the release pipeline publishes matching feeds
+and ZIPs. Development builds and the browser development gateway never check or install.
+They display a preview of the sidebar update icon; its tooltip identifies the
+development preview, and clicking it does not install or restart anything.
+
+Electron's native Squirrel updater downloads the ZIP in the background and checks
+its code signature against the installed app. The Iconoir circular refresh icon at the bottom of the workspace sidebar spins
+while checking, downloading or preparing a restart. Reduced-motion preferences
+disable rotation. A small green check-circle badge appears only after staging
+succeeds; failures use an amber warning-circle badge. Colors match thread status
+indicators. Status, version and retry details appear in a compact tooltip above
+the control on hover or keyboard focus, dismissible with Escape. No status or
+error text reserves space beside the icon. Busy controls remain focusable for
+inspection and ignore activation until the operation completes. Clicking it stops
+active harness runs, checkpoints their threads, flushes local storage, and restarts
+to install. Squirrel also applies staged updates on the next normal quit/relaunch.
+Every update replaces the installed app and requires a restart. There is no
+automatic restart or extra menu entry. Download/check failures expose sanitized
+retry feedback. If native restart fails, the staged update remains retryable and
+the workspace reopens for new work; stopped harness runs require a follow-up
+message to continue.
+
+Older builds without this updater need one manual DMG installation. Install Tidy
+in Applications before updating; running from a mounted DMG or a read-only folder
+cannot be updated in place. Keep the bundle ID and Developer ID signing identity
+consistent between releases. The versioned update feed uses Squirrel's default
+format; version/channel comparison happens in the main process using the full
+package version, including the numeric beta suffix.
+
+Before distributing the first updater-enabled release, verify a signed two-version
+upgrade on macOS: install version A from its DMG, publish a higher version B with
+all six assets, leave A running until its icon appears, then click it and confirm
+B launches with projects and interrupted thread history intact. Also verify an
+ordinary quit/relaunch after staging. Unit and native security tests use synthetic
+fixtures and do not replace this signed distribution check.
+On Apple Silicon, `test:security` also runs the built main process with synthetic
+release discovery and native installer events. It checks trusted update-state
+delivery, restart failure recovery/retry, and ordinary quit cleanup. Other
+architectures skip this updater-specific fixture.
+
+Production sign-off is still pending. Exercise signed distribution on a fresh Mac
+and an existing installation, including an offline launch, network interruption
+and sleep/resume during download, low disk space, a read-only or translocated app,
+a rejected signature/corrupted archive, and quitting with pending design edits or
+active harness runs. Verify a failure preserves the installed version and local
+project files, and that a subsequent retry or manual reinstall recovers. Native
+download timeouts/resume and filesystem failure recovery require testing in the
+actual bundled Electron/Squirrel version; unit mocks do not establish them.
+Windows/Linux auto-updates and an Intel release pipeline are outside this release.
 
 The future download page can select the highest beta version from published
 `desktop-v*` prereleases and consume that release's `desktop-release.json`.
@@ -76,7 +142,7 @@ for secrets, and runs type checks, lint, unit tests and release regressions. The
 macOS job stamps/builds the same commit, runs the native security smoke before
 importing credentials, then signs and notarizes the app and DMG. It verifies
 signatures, stapled tickets and Gatekeeper acceptance before uploading artifacts.
-Only the selected installer, checksum and metadata leave that job. Its temporary
+Only the selected installer, update ZIP, checksums and metadata leave that job. Its temporary
 Keychain and `.p12` are removed on success or failure.
 The signing step registers that temporary Keychain in the runner's user search
 list: `codesign --keychain` alone does not make its certificate chain discoverable.
@@ -84,8 +150,8 @@ list: `codesign --keychain` alone does not make its certificate chain discoverab
 The isolated Linux publisher downloads the signing job's exact artifact ID from
 the same workflow run. It validates all filenames, regular-file boundaries,
 version/commit/run metadata and the actual installer hash before using its write
-token. It stages a **draft release**, uploads all three files, verifies their
-sizes, downloads them into a fresh directory, and compares all three SHA-256
+token. It stages a **draft release**, uploads all six files, verifies their
+sizes, downloads them into a fresh directory, and compares all six SHA-256
 digests against the validated local files before publishing a prerelease with
 `--latest=false`. After publication it repeats the asset readback and requires
 the release tag to resolve to the expected source commit. Release drafts
@@ -122,7 +188,7 @@ not assume publication order. No beta release changes the stable channel.
   installer is published. Notify maintainers through normal Actions failure emails.
 
 Before marking a release stable, use a separately reviewed stable release process,
-verify installation and project compatibility, and add the installed-app updater.
+verify installation, update-channel behavior and project compatibility.
 
 ## Workflow security checks
 

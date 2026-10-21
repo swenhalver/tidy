@@ -75,8 +75,36 @@ GitHub-hosted runner, removed even on failure; only the publisher has
 `contents: write`, and it never receives Apple credentials. Publication validates
 the exact commit, version, allowed filenames, metadata and installer checksum.
 Published releases are never overwritten, and betas never become GitHub's stable
-Latest release. Automatic updates are not configured. An unsigned package is not
-a public-release artifact.
+Latest release. An unsigned package is not a public-release artifact.
+
+Automatic macOS updates use Electron's native Squirrel updater, which requires the
+replacement app to satisfy the running app's code-signing requirement. Discovery
+runs only in packaged Apple Silicon macOS apps, at startup and every 30 minutes, using the public
+GitHub releases API for the fixed `tidydesigns/tidy` repository. These requests send
+no project data, credentials, account IDs or local paths. Release discovery requests
+use an in-memory conditional-response cache; rate limits defer automatic and manual
+checks with retry/reset deadlines and increasing backoff. Discovery requests still
+share the public IP's unauthenticated GitHub quota. Version/channel checks
+reject downgrades, drafts, unrelated tags and missing/wrong-architecture assets;
+asset URLs must exactly match the selected release in that repository. The release
+publisher verifies the ZIP checksum and the feed's version/URL before publication,
+and the macOS builder extracts the ZIP and checks its signature, stapled ticket and
+Gatekeeper acceptance. Repository release writers and the Apple signing identity
+remain trusted. Runtime installation relies on native code-signature verification,
+not on an unsigned checksum fetched from the same release.
+
+The isolated renderer can only read update state, subscribe to sanitized state
+changes, retry a check against the fixed release source, or request installation of an
+already staged update. It cannot supply a
+feed, version, path or download URL. Update IPC uses the same trusted top-frame and
+window checks as workspace requests and rejects arguments. Browser development has
+no update installation endpoint. Clicking install checkpoints/stops harness jobs
+and flushes storage before the native updater closes windows; background checks do
+not restart the app. Native restart errors restore the workspace admission state
+and preserve the staged update for a retry; they cannot leave the UI in an
+installing state. Recovery releases only its own update reservation and cannot
+reopen harness admission or cancel an ordinary quit that began during preparation.
+Native error details remain outside the renderer.
 
 Run from the repository root:
 

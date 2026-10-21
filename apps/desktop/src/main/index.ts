@@ -1,10 +1,11 @@
 import { version } from "../../package.json";
-import { app, BrowserWindow, nativeTheme, net, protocol, session } from "electron";
+import { app, autoUpdater, BrowserWindow, nativeTheme, net, protocol, session } from "electron";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ProjectStore } from "./project-store";
 import { WorkspaceService } from "./workspace-service";
-import { registerWorkspaceIPC } from "./ipc";
+import { registerUpdateIPC, registerWorkspaceIPC } from "./ipc";
+import { AppUpdates } from "./app-updates";
 import {
   APP_SCHEME,
   rendererURL,
@@ -18,7 +19,8 @@ protocol.registerSchemesAsPrivileged([
 const entryURL = rendererURL(app.isPackaged, process.env.ELECTRON_RENDERER_URL);
 
 let service: WorkspaceService | undefined;
-let quitting = false;
+let quitting: symbol | "quit" | undefined;
+let updates: AppUpdates | undefined;
 const appIcon = app.isPackaged
   ? process.platform === "linux"
     ? join(app.getAppPath(), "icon.png")
@@ -79,6 +81,24 @@ app
     await store.recover();
     service = new WorkspaceService(store);
     registerWorkspaceIPC(service, entryURL);
+    updates = new AppUpdates({
+      supported: app.isPackaged && process.platform === "darwin" && process.arch === "arm64",
+      version,
+      arch: process.arch,
+      native: autoUpdater,
+      fetch: net.fetch.bind(net),
+      async prepareInstall() {
+        const resumeWorkspace = await service!.prepareUpdate();
+        const update = Symbol("update");
+        if (!quitting) quitting = update;
+        return () => {
+          if (quitting === update) quitting = undefined;
+          resumeWorkspace();
+        };
+      },
+    });
+    registerUpdateIPC(updates, entryURL);
+    updates.start();
     protocol.handle(APP_SCHEME, async (request) => {
       try {
         if (request.method !== "GET" && request.method !== "HEAD")
@@ -125,8 +145,10 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
+  // Update restarts still need native errors to restore the prepared workspace.
+  if (!quitting) updates?.stop();
   if (quitting || !service) return;
   event.preventDefault();
-  quitting = true;
+  quitting = "quit";
   void service.close().finally(() => app.quit());
 });
