@@ -5,6 +5,7 @@ import sharp from "sharp";
 import { chooseSelectMenu, selectMenuText } from "../../scripts/select-menu-controls.mjs";
 import { test, expect, required } from "./fixtures";
 import type { Locator, Page } from "playwright";
+import { visibleColourPoint } from "./color-sampling";
 
 test("token edits, bindings, history and exported pixels", async ({ page, baseURL }) => {
   const base = baseURL!;
@@ -60,8 +61,14 @@ test("token edits, bindings, history and exported pixels", async ({ page, baseUR
   await select("Card");
   const bindings = page
     .locator("details")
-    .filter({ has: page.locator("summary").filter({ hasText: /^Token bindings$/ }) });
+    .filter({ has: page.locator(":scope > summary").filter({ hasText: /^Token bindings$/ }) });
   const openBindings = async () => {
+    const advanced = page
+      .getByLabel("Inspector", { exact: true })
+      .locator("details")
+      .filter({ has: page.locator("summary").filter({ hasText: /^Advanced$/ }) });
+    if (!(await advanced.evaluate((element: HTMLDetailsElement) => element.open)))
+      await advanced.locator(":scope > summary").click();
     if (!(await bindings.evaluate((element: HTMLDetailsElement) => element.open)))
       await bindings.locator("summary").click();
   };
@@ -231,6 +238,7 @@ test("detaching paint tokens keeps resolved colors and alpha for fills, strokes 
   await page.getByRole("tab", { name: "Layers", exact: true }).click();
   await page.getByRole("button", { name: "Select Card", exact: true }).first().click();
   const card = page.locator('[data-node-id="token-card"]');
+  await page.getByRole("button", { name: "Edit fill 1", exact: true }).click();
   await chooseSelectMenu(page, "Fill token", "color");
   const boundFill = await card.evaluate((node) => getComputedStyle(node).backgroundColor);
   expect(boundFill).toMatch(/^rgba\(34, 115, 89, 0\.5/);
@@ -242,6 +250,10 @@ test("detaching paint tokens keeps resolved colors and alpha for fills, strokes 
   await page.keyboard.press("ControlOrMeta+Shift+z");
   expect(await selectMenuText(page, "Fill token")).toBe("No token");
 
+  await page
+    .locator("summary")
+    .filter({ hasText: /^Add appearance$/ })
+    .click();
   await page.getByRole("button", { name: "Add stroke", exact: true }).click();
   await chooseSelectMenu(page, "Stroke token", "color");
   const boundStroke = await card.evaluate((node) => getComputedStyle(node).borderImageSource);
@@ -269,6 +281,7 @@ test("picking an unselected layer copies alpha, blocks dragging and Delete, and 
   await page.addInitScript(() => Reflect.deleteProperty(window, "EyeDropper"));
   await page.goto("/dev/import-preview?edit=1&tokens=1");
   await page.getByRole("button", { name: "Select Card", exact: true }).first().click();
+  await page.getByRole("button", { name: "Edit fill 1", exact: true }).click();
   const fill = page.getByRole("textbox", { name: "Fill color", exact: true });
   await fill.fill("#22735980");
   await fill.press("Enter");
@@ -287,7 +300,7 @@ test("picking an unselected layer copies alpha, blocks dragging and Delete, and 
   await page.getByRole("button", { name: "Open color palette", exact: true }).click();
   await page.getByRole("button", { name: "Pick from canvas", exact: true }).click();
   await expect(dialog).toBeHidden();
-  await expect(card).toHaveCSS("cursor", "crosshair");
+  await expect(card).toHaveCSS("cursor", "none");
   await page.keyboard.press("Delete");
   await expect(card).toBeVisible();
   await page.mouse.move(before.x + 20, before.y + 20);
@@ -311,6 +324,7 @@ test("canvas color picking handles empty space, gradients and cancellation witho
 }) => {
   await page.goto("/dev/import-preview?edit=1&tokens=1");
   await page.getByRole("button", { name: "Select Card", exact: true }).first().click();
+  await page.getByRole("button", { name: "Edit fill 1", exact: true }).click();
   await chooseSelectMenu(page, "Fill type", "Linear gradient");
   await page.getByRole("tab", { name: "Tokens", exact: true }).click();
   await page.getByRole("button", { name: "Add token", exact: true }).click();
@@ -334,7 +348,12 @@ test("canvas color picking handles empty space, gradients and cancellation witho
   await expect(dialog).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Color", exact: true })).toHaveValue("#ff5d00");
   await start();
-  await page.locator('[data-node-id="token-label"]').click();
+  const glyph = await visibleColourPoint(
+    page,
+    page.locator('[data-node-id="token-label"]'),
+    [30, 30, 30],
+  );
+  await page.mouse.click(glyph.x, glyph.y);
   await expect(dialog).toBeVisible();
   const inheritedText = await page
     .locator('[data-node-id="token-label"]')
@@ -373,10 +392,13 @@ test("filtering out the active token still allows click-away dismissal", async (
 test("canvas picking skips an unpainted container and uses the filled parent", async ({ page }) => {
   await page.goto("/dev/import-preview?edit=1&tokens=1");
   await page.getByRole("button", { name: "Select Tokens frame", exact: true }).first().click();
+  await page.getByRole("button", { name: "Edit fill 1", exact: true }).click();
   const fill = page.getByRole("textbox", { name: "Fill color", exact: true });
   await fill.fill("#227359");
   await fill.press("Enter");
   await page.getByRole("button", { name: "Select Card", exact: true }).first().click();
+  const editFill = page.getByRole("button", { name: "Edit fill 1", exact: true });
+  if ((await editFill.getAttribute("aria-expanded")) !== "true") await editFill.click();
   await page.getByRole("button", { name: "Remove fill", exact: true }).click();
   const card = page.locator('[data-node-id="token-card"]');
   await expect(card).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");

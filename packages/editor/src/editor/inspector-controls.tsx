@@ -3,7 +3,8 @@ import { useId, useRef, useState, type ReactNode } from "react";
 import { SelectMenu } from "../components/ui/select-menu";
 import type { DesignNode, DesignNodeChanges } from "../design/document";
 import { normalizeColor } from "../design/selection-colors";
-import { useCanvasColorPicker } from "./canvas-color-picker";
+import { ColorPickerPopover } from "./color-picker-popover";
+import { useQuietInspector } from "./inspector-presentation";
 import { PropertyField } from "./property-field";
 type Value = string | number | undefined;
 type ColorUpdate = string | ((current: string) => string);
@@ -20,6 +21,8 @@ export function shared<T>(nodes: DesignNode[], get: (node: DesignNode) => T): T 
 
 export function Choice<const T extends string>({
   label,
+  displayLabel,
+  layout,
   replayLabel = false,
   replayOptions = false,
   value,
@@ -27,17 +30,34 @@ export function Choice<const T extends string>({
   onChange,
 }: {
   label: string;
+  displayLabel?: string;
+  layout?: "stacked" | "inline";
   replayLabel?: boolean;
   replayOptions?: boolean;
   value: Value;
   choices: readonly (readonly [T, string])[];
   onChange: (value: T) => void;
 }) {
+  const quiet = useQuietInspector();
+  const inline = quiet && layout !== "stacked";
   const labelId = useId();
   return (
-    <div className="min-w-0 text-[10px] text-secondary-ink">
+    <div
+      className={
+        inline
+          ? "inspector-choice flex min-w-0 items-center justify-between gap-3 text-[11px] text-secondary-ink"
+          : "min-w-0 text-[10px] text-secondary-ink"
+      }
+    >
       <span id={labelId} data-ph-public={replayLabel || undefined}>
-        {label}
+        {displayLabel ? (
+          <>
+            <span className="sr-only">{label}</span>
+            <span aria-hidden="true">{displayLabel}</span>
+          </>
+        ) : (
+          label
+        )}
       </span>
       <SelectMenu
         replayLabel={replayLabel}
@@ -45,7 +65,12 @@ export function Choice<const T extends string>({
         label={label}
         labelledBy={labelId}
         size="sm"
-        className="mt-1"
+        className={inline ? "min-w-0 flex-1" : "mt-1"}
+        triggerClassName={
+          quiet
+            ? "flex h-8 w-full items-center justify-between gap-2 rounded-md border border-transparent bg-hover-surface px-2 text-left text-xs text-primary-black outline-none focus-visible:ring-1 focus-visible:ring-primary-orange disabled:opacity-50"
+            : undefined
+        }
         value={value === undefined ? "__mixed" : String(value)}
         onChange={(value) => {
           const option = choices.find(([key]) => key === value);
@@ -71,14 +96,23 @@ export function Section({
   action?: ReactNode;
   children: ReactNode;
 }) {
+  const quiet = useQuietInspector();
   return (
-    <section className="space-y-2 border-b border-primary-grey/60 px-4 py-3">
-      <div className="flex items-center justify-between gap-2">
-        <h3 data-ph-public={replayTitle || undefined} className="text-xs font-medium">
-          {title}
-        </h3>
-        {action}
-      </div>
+    <section
+      className={
+        quiet
+          ? "inspector-section space-y-3 border-b border-primary-grey px-4 py-4"
+          : "space-y-2 border-b border-primary-grey/60 px-4 py-3"
+      }
+    >
+      {(title || action) && (
+        <div className="flex items-center justify-between gap-2">
+          <h3 data-ph-public={replayTitle || undefined} className="text-xs font-medium">
+            {title}
+          </h3>
+          {action}
+        </div>
+      )}
       {children}
     </section>
   );
@@ -87,6 +121,7 @@ export function Section({
 export function ColorField({
   label,
   compact = false,
+  onOpenChange,
   replayLabel = false,
   nodes,
   get,
@@ -94,13 +129,19 @@ export function ColorField({
 }: {
   label: string;
   compact?: boolean;
+  onOpenChange?: (open: boolean) => void;
   replayLabel?: boolean;
   nodes: DesignNode[];
   get: (node: DesignNode) => string;
   onChange: (color: ColorUpdate) => void;
 }) {
+  const quiet = useQuietInspector();
+  const inline = compact || quiet;
   const [open, setOpen] = useState(false);
-  const sampler = useCanvasColorPicker();
+  const toggle = (value: boolean) => {
+    setOpen(value);
+    onOpenChange?.(value);
+  };
   const swatch = useRef<HTMLButtonElement>(null);
   const color = shared(nodes, get);
   const alpha = shared(nodes, (node) => {
@@ -109,12 +150,16 @@ export function ColorField({
   });
   return (
     <div className="space-y-1.5">
-      <div className={compact ? "grid grid-cols-[64px_minmax(0,1fr)] items-center gap-3" : ""}>
-        {compact && <span className="text-xs text-secondary-ink">Value</span>}
+      <div
+        className={
+          compact && !quiet ? "grid grid-cols-[64px_minmax(0,1fr)] items-center gap-3" : ""
+        }
+      >
+        {compact && !quiet && <span className="text-xs text-secondary-ink">Value</span>}
         <div
           className={
-            compact
-              ? "grid grid-cols-[20px_minmax(0,1fr)_64px] items-center gap-1 rounded-md border border-control-border bg-surface px-2"
+            inline
+              ? "grid grid-cols-[20px_minmax(0,1fr)_64px] items-center gap-1 rounded-md border border-transparent bg-hover-surface px-2"
               : "grid grid-cols-[32px_1fr_64px] items-end gap-1.5"
           }
         >
@@ -124,24 +169,28 @@ export function ColorField({
             type="button"
             aria-label={`Open ${label.toLowerCase()} palette`}
             aria-expanded={open}
-            onClick={() => setOpen(!open)}
-            className={`${compact ? "h-5 w-5" : "h-8 w-8"} rounded border border-primary-grey/70 focus-visible:outline-2 focus-visible:outline-primary-orange`}
+            onClick={() => toggle(!open)}
+            aria-haspopup="dialog"
+            className={`${inline ? "h-5 w-5" : "h-8 w-8"} rounded border border-primary-grey/70 focus-visible:outline-2 focus-visible:outline-primary-orange`}
             style={{ backgroundColor: color ?? "#ffffff" }}
           />
           <PropertyField
             replayLabel={replayLabel}
             label={label}
-            layout={compact ? "embedded" : "stacked"}
+            layout={inline ? "embedded" : "stacked"}
             value={color}
             validate={(value) =>
               normalizeColor(value) ? undefined : "Enter a hex color such as #336699 or #336699ff."
             }
-            onCommit={onChange}
+            onCommit={(value) => {
+              const normalized = normalizeColor(value);
+              if (normalized) onChange(normalized);
+            }}
           />
-          <div className={compact ? "flex items-center text-xs text-secondary-ink" : ""}>
+          <div className={inline ? "flex items-center text-xs text-secondary-ink" : ""}>
             <PropertyField
               replayLabel={replayLabel}
-              layout={compact ? "embedded" : "stacked"}
+              layout={inline ? "embedded" : "stacked"}
               label={`${label} alpha %`}
               value={alpha}
               numeric
@@ -158,43 +207,17 @@ export function ColorField({
                 );
               }}
             />
-            {compact && <span aria-hidden="true">%</span>}
+            {inline && <span aria-hidden="true">%</span>}
           </div>
         </div>
       </div>
       {open && (
-        <div className="space-y-2 rounded-md border border-primary-grey/70 bg-surface p-2 text-[10px]">
-          <div className="flex items-center gap-2">
-            <label className="flex items-center gap-1">
-              <span data-ph-public style={{ display: "contents" }}>
-                Color picker
-              </span>
-              <input
-                aria-label={`Choose ${label.toLowerCase()}`}
-                type="color"
-                value={color?.slice(0, 7) ?? "#000000"}
-                onChange={(event) => {
-                  const rgb = event.target.value;
-                  onChange((current) => rgb + (current.length === 9 ? current.slice(7) : ""));
-                }}
-                className="h-7 w-8 cursor-pointer rounded border border-primary-grey/70 bg-surface p-0.5"
-              />
-            </label>
-            {sampler && (
-              <button
-                data-ph-public
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  sampler.pick(onChange, swatch.current);
-                }}
-                className="rounded border border-primary-grey/70 px-2 py-1 hover:bg-primary-grey/20 focus-visible:outline-2 focus-visible:outline-primary-orange"
-              >
-                Pick from canvas
-              </button>
-            )}
-          </div>
-        </div>
+        <ColorPickerPopover
+          anchor={swatch}
+          color={color ?? "#000000"}
+          onChange={onChange}
+          onClose={() => toggle(false)}
+        />
       )}
     </div>
   );
