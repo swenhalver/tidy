@@ -19,10 +19,21 @@ const entryURL = rendererURL(app.isPackaged, process.env.ELECTRON_RENDERER_URL);
 
 let service: WorkspaceService | undefined;
 let quitting = false;
+const appIcon = app.isPackaged
+  ? process.platform === "linux"
+    ? join(app.getAppPath(), "icon.png")
+    : undefined
+  : join(
+      import.meta.dirname,
+      "../../resources",
+      process.platform === "darwin" ? "icon-macos.png" : "icon.png",
+    );
 
+/** Open the workspace with its platform icon and restricted renderer permissions. */
 async function createWindow() {
   const window = new BrowserWindow({
     title: "Tidy",
+    icon: appIcon,
     width: 1200,
     height: 800,
     minWidth: 640,
@@ -62,6 +73,7 @@ app
   .whenReady()
   .then(async () => {
     if (!ownsWorkspace) return;
+    if (process.platform === "darwin" && appIcon) app.dock?.setIcon(appIcon);
     const store = new ProjectStore(join(app.getPath("userData"), "workspace"));
     await store.initialize();
     await store.recover();
