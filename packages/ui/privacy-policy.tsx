@@ -14,7 +14,7 @@ export function PrivacyPolicy({ accountUrl }: { accountUrl: string }) {
     <article className="tidy-privacy-policy">
       <header>
         <h1>Privacy policy</h1>
-        <p className="policy-date">Last updated: 16 October 2026</p>
+        <p className="policy-date">Last updated: 21 October 2026</p>
         <p>
           This notice covers tidydesign.co, the hosted Tidy app, registration, login and connected
           features. Sean Dowdall, an individual based in Ireland, operates Tidy and is the
@@ -126,7 +126,12 @@ export function PrivacyPolicy({ accountUrl }: { accountUrl: string }) {
           <strong>Optional browser features. Consent.</strong> In the app, including login and
           sign-up, optional collection starts only for the purposes you turn on in{" "}
           <strong>Privacy choices</strong>. Rejecting, closing the dialog or doing nothing leaves
-          unselected purposes off. You can accept all, reject all or change each purpose separately.
+          unselected purposes off. <strong>Accept all optional</strong> enables usage analytics,
+          session replay, browser performance and errors, and account-linked MCP diagnostics.
+          <strong> Reject all optional</strong> declines all four. Each purpose also has its own
+          control. Browser choices continue after sign-in on the same browser; MCP linking applies
+          across your account as described below. Existing browser-only acceptances do not grant MCP
+          linking; we ask for a fresh choice under this notice.
         </p>
         <dl>
           <dt>Usage analytics</dt>
@@ -229,21 +234,31 @@ export function PrivacyPolicy({ accountUrl }: { accountUrl: string }) {
           details below; we assess objections as described under your rights.
         </p>
         <p>
-          <strong>Optional account linking — consent.</strong> Turning on{" "}
-          <strong>Link MCP monitoring to my account</strong> in{" "}
-          <strong>Settings → Preferences → Privacy</strong> (or your account privacy page if you
-          have no organisation) lets us associate tool events with your account for troubleshooting.
-          These events use precise timestamps and a pseudonymous identifier that Tidy can link to
-          your account through your consent record. We do not send your email address or direct
-          account ID to PostHog, or join these events to browser profiles or replay.
+          <strong>Optional account linking — consent.</strong> Choosing{" "}
+          <strong>Accept all optional</strong> or turning on{" "}
+          <strong>Account-linked MCP diagnostics</strong> in{" "}
+          <strong>
+            Settings → Preferences → Privacy → Privacy choices → Diagnostics and troubleshooting
+          </strong>{" "}
+          (or <strong>Privacy choices</strong> on your account privacy page if you have no
+          organisation) lets us associate tool events with your account for troubleshooting. These
+          events use precise timestamps and a pseudonymous identifier that Tidy can link to your
+          account through your consent record. We do not send your email address or direct account
+          ID to PostHog, or join these events to browser profiles or replay.
         </p>
         <p>
-          Account linking is off by default, separate from browser choices and agent access, and
-          expires after 90 days. Turning it off does not affect MCP access. Withdrawal or expiry
-          stops new account linking and queues the linked events for provider erasure; monitoring
-          without account linking continues. Account deletion also queues linked events for erasure.
-          A new opt-in uses a new identifier. Consent evidence is retained for up to one year or
-          until account deletion.
+          Account linking starts off until you choose it. A choice made before sign-in is recorded
+          as a pending decision and applies once to the next account you sign in to. It cannot
+          enable linking for a different account later, override a newer account decision, or extend
+          an existing consent period. Pending choices and account linking expire 90 days after the
+          original choice. Browser-only controls and MCP access do not enable linking. Declining or
+          withdrawing account linking does not affect MCP access. Turning off its individual control
+          or choosing <strong>Reject all optional</strong> after sign-in withdraws account linking;
+          rejecting before sign-in records that refusal for the next account you sign in to.
+          Withdrawal or expiry stops new account linking and queues the linked events for provider
+          erasure; monitoring without account linking continues. Account deletion also queues linked
+          events for erasure. A new opt-in uses a new identifier. Consent evidence is retained for
+          up to one year or until account deletion.
         </p>
         <p>
           Events without account linking are grouped by day and scheduled for provider-deletion
@@ -271,10 +286,14 @@ export function PrivacyPolicy({ accountUrl }: { accountUrl: string }) {
           <dt>Necessary privacy-choice storage</dt>
           <dd>
             The host-only <code>tidy_consent</code> cookie records this notice&#39;s consent
-            version, the time and each choice for 180 days. A separate HttpOnly receipt cookie,
-            lasting up to one year, links your browser to the server record of your choice; it does
-            not authorise tracking by itself. A local-storage change marker synchronises open tabs.
-            Existing or older consent versions do not silently opt you into new purposes.
+            version, the time and the browser choices for 180 days. A separate HttpOnly receipt
+            cookie, lasting up to one year, links your browser to the server record of your choice;
+            it does not authorise tracking by itself. A local-storage change marker synchronises
+            open tabs. The separate HttpOnly <code>tidy_mcp_privacy_intent</code> cookie lasts up to
+            90 days and holds a random token for a pending MCP choice made before sign-in. Only a
+            hash of that token is stored with the decision. It can apply the recorded choice to one
+            account after authentication and is not sent to PostHog. Existing or older consent
+            versions do not silently opt you into new purposes.
           </dd>
           <dt>Functional preference storage</dt>
           <dd>
