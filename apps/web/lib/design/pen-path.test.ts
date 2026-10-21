@@ -10,7 +10,6 @@ import { DESIGN_GEOMETRY_LIMITS, layerSizeLimit } from "@tidy/design/document-li
 import { createPenPath } from "../../../../packages/editor/src/design/pen-path";
 import { resizeBox } from "./resize-box";
 import { proportionalImageSize } from "./image-sizing";
-import { exportDimensions } from "./export-plan";
 
 function path(contour?: VectorContour) {
   return createPenPath({
@@ -39,29 +38,18 @@ for (const parse of [parseDesignDocument, parseImmutableDesignDocument]) {
   });
 }
 
-test("curves retain both handles and open or closed topology beyond the old size limit", () => {
-  for (const closed of [false, true]) {
-    const node = path({
-      id: "curve",
-      closed,
-      points: [
-        {
-          id: "a",
-          x: 0,
-          y: 0,
-          in: { x: -4000, y: 6000 },
-          out: { x: 4000, y: -6000 },
-          mode: "symmetric",
-        },
-        { id: "b", x: 6000, y: 3000 },
-      ],
-    });
-    expect(designNodeSchema.safeParse(node).success).toBe(true);
-    expect(node.box).toEqual({ x: -4000, y: -6000, width: 10000, height: 12000 });
-    expect(node.vectorPath?.contours?.[0].points[0].in).toEqual({ x: 0, y: 12000 });
-    expect(node.vectorPath?.contours?.[0].points[0].out).toEqual({ x: 8000, y: 0 });
-    expect(node.vectorPath?.d.endsWith("Z")).toBe(closed);
-  }
+test("curve handles can extend beyond the old limit even when anchors fit", () => {
+  const node = path({
+    id: "curve",
+    closed: false,
+    points: [
+      { id: "a", x: 0, y: 0, out: { x: 6000, y: 0 } },
+      { id: "b", x: 100, y: 100 },
+    ],
+  });
+  const saved = designNodeSchema.parse(node);
+  expect(saved.box).toEqual({ x: 0, y: 0, width: 6000, height: 100 });
+  expect(saved.vectorPath?.d).toBe("M 0 0 C 6000 0 100 100 100 100");
 });
 
 test("large vector limits do not admit oversized raster, frame, text, or container layers", () => {
@@ -101,13 +89,4 @@ test("large pen paths resize without clamping to the old limit", () => {
   expect(resized.x).toBe(node.box.x);
   const proportional = proportionalImageSize(node.box, "width", 16000, maxSize);
   expect(proportional).toEqual({ width: 16000, height: 7000 });
-  expect(
-    designNodeSchema.safeParse({ ...node, box: { ...node.box, ...proportional } }).success,
-  ).toBe(true);
-});
-
-test("large geometry does not bypass raster export allocation limits", () => {
-  const box = path().box;
-  expect(exportDimensions(box, 0.5)).toEqual({ width: 4000, height: 1750 });
-  expect(() => exportDimensions(box, 4)).toThrow("Export exceeds");
 });

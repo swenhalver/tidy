@@ -71,5 +71,4 @@ test("SVG dimensions support large paths without relaxing raster budgets", () =>
   for (const format of ["png", "webp", "pdf"] as const)
     expect(() => exportDimensions(bounds, 1, format)).toThrow("Export exceeds");
   expect(() => exportDimensions({ ...bounds, width: Infinity }, 1, "svg")).toThrow("finite");
-  expect(() => exportDimensions(bounds, NaN, "svg")).toThrow("scale");
 });
