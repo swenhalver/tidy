@@ -57,6 +57,10 @@ export const vectorPathSchema = z
   .strict()
   .superRefine((path, ctx) => {
     if (!path.contours) return;
+    if (path.contours.reduce((count, contour) => count + contour.points.length, 0) > 1000) {
+      ctx.addIssue({ code: "custom", message: "Paths need at most 1,000 points." });
+      return;
+    }
     const points = path.contours.flatMap((c) =>
       c.points.flatMap((p) => [p, ...(p.in ? [p.in] : []), ...(p.out ? [p.out] : [])]),
     );
@@ -76,13 +80,12 @@ export const vectorPathSchema = z
       });
     const ids = path.contours.flatMap((c) => c.points.map((p) => p.id));
     if (
-      ids.length > 1000 ||
       new Set(ids).size !== ids.length ||
       new Set(path.contours.map((c) => c.id)).size !== path.contours.length
     )
       ctx.addIssue({
         code: "custom",
-        message: "Paths need unique contour/point IDs and at most 1,000 points.",
+        message: "Paths need unique contour/point IDs.",
       });
     if (serializeContours(path.contours) !== path.d)
       ctx.addIssue({ code: "custom", message: "Path data must match its editable contours." });

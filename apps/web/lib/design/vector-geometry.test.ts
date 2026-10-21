@@ -15,6 +15,7 @@ import {
   buildDrawnNode,
   parseDesignDocument,
   designNodeChangesSchema,
+  designNodeSchema,
   type DesignNode,
 } from "./document";
 import { diffDocument, applyDocumentPatch, invertPatch } from "./document-patch";
@@ -24,6 +25,29 @@ import { createComponentInstance, makeComponent } from "./document-operations";
 import { DocumentPreview } from "@/app/files/thumbnail-renderer";
 import { TidyDesign } from "./code-runtime";
 import { vectorSvg, vectorViewport, vectorImageStyle } from "./vector-path";
+
+test("over-budget contours are rejected before expanding handles or serializing geometry", () => {
+  const result = designNodeSchema.shape.vectorPath.safeParse({
+    d: "M0 0",
+    viewBox: { x: 0, y: 0, width: 1, height: 1 },
+    contours: Array.from({ length: 50 }, (_, contour) => ({
+      id: String(contour),
+      closed: false,
+      points: Array.from({ length: 1000 }, (_, point) => ({
+        id: `${contour}-${point}`,
+        x: 0,
+        y: 0,
+        in: { x: 0, y: 0 },
+        out: { x: 0, y: 0 },
+      })),
+    })),
+  });
+  expect(result.success).toBe(false);
+  if (!result.success)
+    expect(result.error.issues).toEqual([
+      { code: "custom", message: "Paths need at most 1,000 points.", path: [] },
+    ]);
+});
 
 const path = (d = "M10 20 C20 0 80 0 90 20 L90 80 Z") => {
   const contours = parsePathContours(d);
