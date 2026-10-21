@@ -1,3 +1,4 @@
+import { DESIGN_GEOMETRY_LIMITS } from "@tidy/design/document-limits";
 import type { DesignNode } from "./document";
 
 export const resizeHandles = ["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const;
@@ -27,6 +28,7 @@ export function resizeBox(
   handle: ResizeHandle,
   delta: Point,
   options: {
+    maxSize?: number;
     rotation?: number;
     centered?: boolean;
     aspect?: boolean;
@@ -35,6 +37,7 @@ export function resizeBox(
     flipY?: boolean;
   } = {},
 ): DesignNode["box"] {
+  const maxSize = options.maxSize ?? DESIGN_GEOMETRY_LIMITS.layerSize;
   const horizontal = handle.includes("e") ? 1 : handle.includes("w") ? -1 : 0;
   const vertical = handle.includes("s") ? 1 : handle.includes("n") ? -1 : 0;
   const local = rotatePoint(delta, -(options.rotation ?? 0));
@@ -53,19 +56,22 @@ export function resizeBox(
           : height / box.height;
     scale = Math.max(
       1 / Math.min(box.width, box.height),
-      Math.min(5000 / Math.max(box.width, box.height), scale),
+      Math.min(maxSize / Math.max(box.width, box.height), scale),
     );
     // Snap one axis only so the exact aspect ratio survives.
     if (options.snap)
       scale = Math.max(
         1 / Math.min(box.width, box.height),
-        Math.min(5000 / Math.max(box.width, box.height), Math.round(box.width * scale) / box.width),
+        Math.min(
+          maxSize / Math.max(box.width, box.height),
+          Math.round(box.width * scale) / box.width,
+        ),
       );
     width = box.width * scale;
     height = box.height * scale;
   } else {
-    width = Math.max(1, Math.min(5000, options.snap ? Math.round(width) : width));
-    height = Math.max(1, Math.min(5000, options.snap ? Math.round(height) : height));
+    width = Math.max(1, Math.min(maxSize, options.snap ? Math.round(width) : width));
+    height = Math.max(1, Math.min(maxSize, options.snap ? Math.round(height) : height));
   }
   const shift = options.centered
     ? { x: 0, y: 0 }

@@ -7,10 +7,13 @@ import {
 } from "./document";
 import { layoutReport } from "./layout-diagnostics";
 
-const properties = designNodeSchema.omit({ parentId: true, box: true, layout: true }).extend({
-  box: designNodeSchema.shape.box.optional(),
-  layout: designNodeSchema.shape.layout.removeDefault().optional(),
-});
+const properties = z
+  .object(designNodeSchema.shape)
+  .omit({ parentId: true, box: true, layout: true })
+  .extend({
+    box: designNodeSchema.shape.box.optional(),
+    layout: designNodeSchema.shape.layout.removeDefault().optional(),
+  });
 export type ComponentTree = z.input<typeof properties> & { children?: ComponentTree[] };
 export const componentTreeSchema: z.ZodType<ComponentTree> = z.lazy(() =>
   properties.extend({ children: z.array(componentTreeSchema).max(250).optional() }),

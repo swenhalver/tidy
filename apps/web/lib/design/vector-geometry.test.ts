@@ -8,12 +8,14 @@ import {
   moveVectorPoint,
   splitVectorSegment,
   setVectorPointMode,
+  type VectorContour,
 } from "@tidy/design/vector-geometry";
 import {
   blankDesignDocument,
   buildDrawnNode,
   parseDesignDocument,
   designNodeChangesSchema,
+  type DesignNode,
 } from "./document";
 import { diffDocument, applyDocumentPatch, invertPatch } from "./document-patch";
 import { editLayers } from "./edit-document";
@@ -39,7 +41,7 @@ const path = (d = "M10 20 C20 0 80 0 90 20 L90 80 Z") => {
       strokePaints: [],
       borderWidth: 0,
     },
-  };
+  } satisfies DesignNode;
 };
 
 test("SVG command grammar resolves repeated relative, reflected, quadratic and compact arc commands", () => {
@@ -49,7 +51,7 @@ test("SVG command grammar resolves repeated relative, reflected, quadratic and c
   expect(points[1]).toMatchObject({ x: 20, y: 20 });
   expect(points[3]).toMatchObject({ x: 30, y: 30 });
   expect(points[4].out).toEqual({ x: 40, y: 20 });
-  expect(points[6].out.y).toBeCloseTo(16.6666667);
+  expect(points[6].out!.y).toBeCloseTo(16.6666667);
   expect(points.at(-1)).toMatchObject({ x: 100, y: 40 });
   const afterClose = parsePathContours("M10 10 L20 20 Z l10 0");
   expect(afterClose[1].points).toMatchObject([
@@ -78,7 +80,7 @@ test("curve subdivision preserves raster output and moving anchors carries their
   const node = path(),
     original = node.vectorPath.contours;
   const divided = splitVectorSegment(original, original[0].id, 0, "inserted");
-  const raster = async (contours) =>
+  const raster = async (contours: VectorContour[]) =>
     sharp(
       Buffer.from(
         vectorSvg(
@@ -93,6 +95,7 @@ test("curve subdivision preserves raster output and moving anchors carries their
   expect(await raster(divided)).toEqual(await raster(original));
   const p = original[0].points[0];
   const moved = moveVectorPoint(original, p.id, "anchor", { x: 20, y: 30 })[0].points[0];
+  if (!p.out) throw new Error("Expected the cubic segment to have an outgoing handle.");
   expect(moved.out).toEqual({ x: p.out.x + 10, y: p.out.y + 10 });
   const symmetric = setVectorPointMode(original, p.id, "symmetric");
   const edited = moveVectorPoint(symmetric, p.id, "out", { x: 40, y: 50 })[0].points[0];
@@ -102,7 +105,7 @@ test("curve subdivision preserves raster output and moving anchors carries their
 test("elliptical arc conversion matches SVG pixels within subpixel approximation", async () => {
   const d = "M90 50 A40 30 25 1 1 10 50 A40 30 25 1 1 90 50 Z";
   const contours = parsePathContours(d);
-  const raster = (data) =>
+  const raster = (data: string) =>
     sharp(
       Buffer.from(
         `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 100 100"><path d="${data}" /></svg>`,
@@ -128,19 +131,22 @@ test("assetless paths survive schema, patches, clipboard, component edits, and r
     patch = diffDocument(source, changed);
   expect(applyDocumentPatch(source, patch).nodes[0].vectorPath).toEqual(vectorPath);
   expect(applyDocumentPatch(changed, invertPatch(patch))).toEqual(source);
-  const copied = pasteLayers(
-    blankDesignDocument(),
-    readDesignClipboard(copyLayers(source, ["path"], "file")),
-    { fileId: "file", pageId: "page-1", parentId: null, createId: () => "copy" },
-  );
+  const clipboard = readDesignClipboard(copyLayers(source, ["path"], "file"));
+  if (!clipboard) throw new Error("Expected a valid layer clipboard.");
+  const copied = pasteLayers(blankDesignDocument(), clipboard, {
+    fileId: "file",
+    pageId: "page-1",
+    parentId: null,
+    createId: () => "copy",
+  });
   expect(copied.document.nodes[0].vectorPath).toEqual(node.vectorPath);
   const master = makeComponent(source, "path"),
     instance = createComponentInstance(master, "path", () => "instance");
   const synced = editLayers(instance.document, ["path"], { vectorPath });
-  expect(synced.nodes.find((n) => n.id === instance.rootId).vectorPath).toEqual(vectorPath);
+  expect(synced.nodes.find((n) => n.id === instance.rootId)!.vectorPath).toEqual(vectorPath);
   for (const component of [
-    createElement(DocumentPreview, { content: changed, width: 200, height: 200 }),
-    createElement(TidyDesign, { document: changed, rootId: "path" }),
+    createElement(DocumentPreview, { content: changed }),
+    createElement(TidyDesign, { document: changed, rootId: "path", assets: {} }),
   ])
     expect(renderToStaticMarkup(component)).toContain("data-vector-path");
   expect(() =>
@@ -188,6 +194,7 @@ test("edited points beyond the original viewport remain visible without moving t
   expect(data[(10 * info.width + 110) * 4 + 3]).toBeGreaterThan(0);
   expect(edited.box).toEqual(node.box);
   const far = moveVectorPoint(contours, "p2", "anchor", { x: 99999, y: 0 });
+  far[0].points[0].x = -10;
   expect(() =>
     parseDesignDocument({
       ...blankDesignDocument(),

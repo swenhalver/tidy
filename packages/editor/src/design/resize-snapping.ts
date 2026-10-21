@@ -1,3 +1,4 @@
+import { DESIGN_GEOMETRY_LIMITS } from "@tidy/design/document-limits";
 import { rotatePoint, type ResizeHandle } from "./resize-box";
 import { nearestSnapAnchor } from "./snap-index";
 import type { SnapBox } from "./snapping";
@@ -5,6 +6,7 @@ import type { SnapBox } from "./snapping";
 type Point = { x: number; y: number };
 type Matrix = { a: number; b: number; c: number; d: number };
 type Options = {
+  maxSize?: number;
   centered?: boolean;
   aspect?: boolean;
   rotation?: number;
@@ -57,8 +59,8 @@ export function snapLayerResize(
       ![width, height].every(Number.isFinite) ||
       width < 1 ||
       height < 1 ||
-      width > 5000 ||
-      height > 5000
+      width > (options.maxSize ?? DESIGN_GEOMETRY_LIMITS.layerSize) ||
+      height > (options.maxSize ?? DESIGN_GEOMETRY_LIMITS.layerSize)
     )
       return;
     const movement = Math.hypot(

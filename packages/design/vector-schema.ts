@@ -1,4 +1,5 @@
 import * as z from "zod";
+import { DESIGN_GEOMETRY_LIMITS } from "./document-limits";
 import { serializeContours } from "./vector-geometry";
 
 const coordinate = z.number().finite().min(-100000).max(100000);
@@ -25,8 +26,8 @@ export const vectorPathSchema = z
         "Path coordinates must be finite and bounded.",
       ),
     viewBox: point.extend({
-      width: z.number().finite().min(1).max(5000),
-      height: z.number().finite().min(1).max(5000),
+      width: z.number().finite().min(1).max(DESIGN_GEOMETRY_LIMITS.vectorSize),
+      height: z.number().finite().min(1).max(DESIGN_GEOMETRY_LIMITS.vectorSize),
     }),
     fillRule: z.enum(["nonzero", "evenodd"]).default("nonzero"),
     shape: z
@@ -65,10 +66,13 @@ export const vectorPathSchema = z
     const extentHeight =
       Math.max(path.viewBox.y + path.viewBox.height, ...points.map((p) => p.y)) -
       Math.min(path.viewBox.y, ...points.map((p) => p.y));
-    if (extentWidth > 5000 || extentHeight > 5000)
+    if (
+      extentWidth > DESIGN_GEOMETRY_LIMITS.vectorSize ||
+      extentHeight > DESIGN_GEOMETRY_LIMITS.vectorSize
+    )
       ctx.addIssue({
         code: "custom",
-        message: "Editable path extents must fit within 5,000 SVG units.",
+        message: `Editable path extents must fit within ${DESIGN_GEOMETRY_LIMITS.vectorSize} SVG units.`,
       });
     const ids = path.contours.flatMap((c) => c.points.map((p) => p.id));
     if (

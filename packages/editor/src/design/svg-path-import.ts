@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { designNodeSchema, type DesignNode } from "./document";
 import { parsePathContours, serializeContours } from "@tidy/design/vector-geometry";
 
@@ -143,25 +144,30 @@ export function inspectSvgImport(source: string): SvgImportResult {
   if (fill === null || stroke === null) return fallback("paint requires asset rendering.");
   try {
     const contours = parsePathContours(paths.join(" "));
-    const result = designNodeSchema.pick({ vectorPath: true, style: true }).safeParse({
-      vectorPath: {
-        d: serializeContours(contours),
-        contours,
-        viewBox: { x, y, width, height },
-        fillRule,
-      },
-      style: {
-        paints: fill
-          ? [{ id: "svg-fill", type: "solid", color: fill, opacity: 1, visible: true }]
-          : [],
-        strokePaints: stroke
-          ? [{ id: "svg-stroke", type: "solid", color: stroke, opacity: 1, visible: true }]
-          : [],
-        borderWidth: stroke ? Number(strokeWidth) : 0,
-        strokeCap,
-        strokeJoin,
-      },
-    });
+    const result = z
+      .object({
+        vectorPath: designNodeSchema.shape.vectorPath,
+        style: designNodeSchema.shape.style,
+      })
+      .safeParse({
+        vectorPath: {
+          d: serializeContours(contours),
+          contours,
+          viewBox: { x, y, width, height },
+          fillRule,
+        },
+        style: {
+          paints: fill
+            ? [{ id: "svg-fill", type: "solid", color: fill, opacity: 1, visible: true }]
+            : [],
+          strokePaints: stroke
+            ? [{ id: "svg-stroke", type: "solid", color: stroke, opacity: 1, visible: true }]
+            : [],
+          borderWidth: stroke ? Number(strokeWidth) : 0,
+          strokeCap,
+          strokeJoin,
+        },
+      });
     return result.success
       ? { editable: result.data }
       : fallback("geometry or paint exceeds editor limits.");

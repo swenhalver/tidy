@@ -64,3 +64,12 @@ test("transformed selection bounds include rotations, negative coordinates and p
     ]),
   ).toEqual({ x: -11, y: -5, width: 81, height: 55 });
 });
+
+test("SVG dimensions support large paths without relaxing raster budgets", () => {
+  const bounds = { x: 0, y: 0, width: 100000, height: 100000 };
+  expect(exportDimensions(bounds, 1, "svg")).toEqual({ width: 100000, height: 100000 });
+  for (const format of ["png", "webp", "pdf"] as const)
+    expect(() => exportDimensions(bounds, 1, format)).toThrow("Export exceeds");
+  expect(() => exportDimensions({ ...bounds, width: Infinity }, 1, "svg")).toThrow("finite");
+  expect(() => exportDimensions(bounds, NaN, "svg")).toThrow("scale");
+});

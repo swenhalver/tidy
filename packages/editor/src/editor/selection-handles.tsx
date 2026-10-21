@@ -1,5 +1,7 @@
 "use client";
 
+import { layerSizeLimit } from "@tidy/design/document-limits";
+
 import { selectionTranslationDelta, canReuseSelectionAncestors } from "./selection-translation";
 import { canvasTransform } from "../design/canvas-geometry";
 import { CornerRadiusHandles } from "./corner-radius-handles";
@@ -255,6 +257,7 @@ export function SelectionHandles({
     if (start.node.style.flipX) local.x *= -1;
     if (start.node.style.flipY) local.y *= -1;
     const options = {
+      maxSize: layerSizeLimit(start.node),
       rotation: start.node.style.rotation,
       flipX: start.node.style.flipX,
       flipY: start.node.style.flipY,
@@ -416,6 +419,7 @@ export function SelectionHandles({
                   y: event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0,
                 },
                 {
+                  maxSize: layerSizeLimit(node),
                   aspect: !crop && node.aspectRatioLocked,
                   centered: event.altKey,
                   rotation: node.style.rotation,

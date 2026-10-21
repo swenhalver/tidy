@@ -1,4 +1,5 @@
 "use client";
+import { layerSizeLimit } from "@tidy/design/document-limits";
 import type { SelectionInspectorProps } from "./types";
 import { useState } from "react";
 import { selectionFields, inspectorButtonClass as buttonClass } from "./fields";
@@ -61,7 +62,7 @@ export function PositionSection({
               value={common((item) => item.box[axis])}
               numeric
               min={1}
-              max={5000}
+              max={Math.min(...selected.map(layerSizeLimit))}
               step="any"
               onCommit={(value) => {
                 if (!value) return;
@@ -69,7 +70,7 @@ export function PositionSection({
                   const locked = item.aspectRatioLocked && !cropping;
                   return {
                     box: locked
-                      ? proportionalImageSize(item.box, axis, Number(value))
+                      ? proportionalImageSize(item.box, axis, Number(value), layerSizeLimit(item))
                       : { [axis]: Number(value) },
                     ...(locked ? { widthMode: "fixed", heightMode: "fixed" } : { [key]: "fixed" }),
                   };

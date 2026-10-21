@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DESIGN_DOCUMENT_LIMITS } from "./document-limits";
+import { checkLayerSize, DESIGN_DOCUMENT_LIMITS } from "./document-limits";
 import type { designDocumentSchema, DesignDocument, DesignNode, DocumentParser } from "./document";
 
 /** Own cache state separately from schemas; each parser instance validates all new graph states. */
@@ -28,22 +28,26 @@ export function createImmutableDocumentParser(
     return value;
   }
   const nodeSchema = schema.shape.nodes.element;
-  const immutableNodeSchema = nodeSchema.extend({
-    box: z
-      .unknown()
-      .transform((input) =>
-        input && typeof input === "object" && immutableBoxes.has(input)
-          ? (input as DesignNode["box"])
-          : nodeSchema.shape.box.parse(input),
-      ),
-    style: z
-      .unknown()
-      .transform((input) =>
-        input && typeof input === "object" && immutableStyles.has(input)
-          ? (input as DesignNode["style"])
-          : nodeSchema.shape.style.parse(input),
-      ),
-  });
+  const immutableNodeSchema = z
+    .object({
+      ...nodeSchema.shape,
+      box: z
+        .unknown()
+        .transform((input) =>
+          input && typeof input === "object" && immutableBoxes.has(input)
+            ? (input as DesignNode["box"])
+            : nodeSchema.shape.box.parse(input),
+        ),
+      style: z
+        .unknown()
+        .transform((input) =>
+          input && typeof input === "object" && immutableStyles.has(input)
+            ? (input as DesignNode["style"])
+            : nodeSchema.shape.style.parse(input),
+        ),
+    })
+    .strict()
+    .superRefine(checkLayerSize);
   function rememberImmutableNode(node: DesignNode) {
     freezeValue(node);
     immutableNodes.add(node);

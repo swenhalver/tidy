@@ -1,3 +1,4 @@
+import { DESIGN_GEOMETRY_LIMITS } from "@tidy/design/document-limits";
 import type { DesignNode } from "./document";
 import { imageViewport } from "./image-viewport";
 import { rotatePoint } from "./resize-box";
@@ -7,10 +8,11 @@ export function proportionalImageSize(
   box: DesignNode["box"],
   axis: "width" | "height",
   value: number,
+  maxSize: number = DESIGN_GEOMETRY_LIMITS.layerSize,
 ) {
   const scale = Math.max(
     1 / Math.min(box.width, box.height),
-    Math.min(5000 / Math.max(box.width, box.height), value / box[axis]),
+    Math.min(maxSize / Math.max(box.width, box.height), value / box[axis]),
   );
   return { width: box.width * scale, height: box.height * scale };
 }

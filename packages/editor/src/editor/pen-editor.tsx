@@ -13,6 +13,8 @@ import { elementPlane } from "../design/canvas-geometry";
 import { useEditorEvent } from "./use-editor-event";
 import { isEditableTarget } from "./editable-target";
 
+export type PenFinishResult = { kind: "committed"; nodeId: string } | { kind: "rejected" };
+
 export function PenEditor({
   viewport,
   nodes,
@@ -20,6 +22,7 @@ export function PenEditor({
   pageId,
   spaceHeld,
   onFinish,
+  onComplete,
   onCancel,
 }: {
   viewport: RefObject<HTMLDivElement | null>;
@@ -27,7 +30,12 @@ export function PenEditor({
   view: { x: number; y: number; zoom: number };
   pageId: string;
   spaceHeld: boolean;
-  onFinish: (contour: VectorContour, parentId: string | null, pageId: string) => boolean;
+  onFinish: (
+    contour: VectorContour,
+    parentId: string | null,
+    pageId: string,
+  ) => Promise<PenFinishResult>;
+  onComplete: (nodeId: string) => void;
   onCancel: () => void;
 }) {
   const [points, setPoints] = useState<VectorAnchor[]>([]);
@@ -37,20 +45,42 @@ export function PenEditor({
     null,
   );
   const active = useRef<{ start: VectorPoint; index: number } | null>(null);
-  const finish = useEditorEvent((closed: boolean) => {
-    if (!draft.current || draft.current.points.length < 2) return;
+  const [finishing, setFinishing] = useState(false);
+  const submission = useRef<object | null>(null);
+  useLayoutEffect(
+    () => () => {
+      submission.current = null;
+    },
+    [],
+  );
+  const finish = useEditorEvent(async (closed: boolean) => {
+    if (submission.current || !draft.current || draft.current.points.length < 2) return;
     const value = draft.current;
+    const attempt = {};
+    submission.current = attempt;
     active.current = null;
-    const finished = onFinish(
-      { id: crypto.randomUUID(), points: value.points, closed },
-      value.parentId,
-      value.pageId,
-    );
-    if (finished) draft.current = null;
-    else viewport.current?.focus({ preventScroll: true });
+    setFinishing(true);
+    try {
+      const result = await onFinish(
+        { id: crypto.randomUUID(), points: value.points, closed },
+        value.parentId,
+        value.pageId,
+      );
+      if (submission.current !== attempt) return;
+      if (result.kind === "committed") {
+        draft.current = null;
+        onComplete(result.nodeId);
+      } else viewport.current?.focus({ preventScroll: true });
+    } finally {
+      if (submission.current === attempt) {
+        submission.current = null;
+        setFinishing(false);
+      }
+    }
   });
   const keys = useEditorEvent((event: KeyboardEvent) => {
     if (
+      submission.current ||
       event.defaultPrevented ||
       event.target !== viewport.current ||
       event.isComposing ||
@@ -106,7 +136,7 @@ export function PenEditor({
     return { x: (p.x - view.x) / view.zoom, y: (p.y - view.y) / view.zoom };
   }
   function begin(event: PointerEvent<HTMLDivElement>) {
-    if (event.button !== 0 || spaceHeld) return;
+    if (submission.current || event.button !== 0 || spaceHeld) return;
     event.preventDefault();
     event.stopPropagation();
     viewport.current?.focus({ preventScroll: true });
@@ -249,13 +279,13 @@ export function PenEditor({
           <button
             data-ph-public
             type="button"
-            disabled={points.length < 2}
+            disabled={finishing || points.length < 2}
             onClick={() => finish(false)}
             className="disabled:opacity-40"
           >
             Finish path
           </button>
-          <button data-ph-public type="button" onClick={onCancel}>
+          <button data-ph-public type="button" disabled={finishing} onClick={onCancel}>
             Cancel
           </button>
         </div>

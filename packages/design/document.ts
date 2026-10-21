@@ -9,7 +9,7 @@ import { designTokensSchema, tokenBindingsSchema } from "./token-schema";
 import { resolveNodeTokens, resolvedDesignTokens } from "./design-tokens";
 import { prototypeInteractionSchema, validatePrototype } from "./prototype";
 
-import { DESIGN_DOCUMENT_LIMITS } from "./document-limits";
+import { DESIGN_DOCUMENT_LIMITS, DESIGN_GEOMETRY_LIMITS, checkLayerSize } from "./document-limits";
 export { DESIGN_DOCUMENT_LIMITS } from "./document-limits";
 
 const number = z.number().finite();
@@ -18,8 +18,18 @@ const tokenName = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/);
 const box = z.object({
   x: number.min(-100000).max(100000),
   y: number.min(-100000).max(100000),
-  width: number.min(1).max(5000),
-  height: number.min(1).max(5000),
+  width: number.min(1).max(DESIGN_GEOMETRY_LIMITS.layerSize),
+  height: number.min(1).max(DESIGN_GEOMETRY_LIMITS.layerSize),
+});
+const layerBox = box.extend({
+  width: number
+    .min(1)
+    .max(DESIGN_GEOMETRY_LIMITS.vectorSize)
+    .describe("Up to 100,000 for editable vector paths; up to 5,000 for other layers."),
+  height: number
+    .min(1)
+    .max(DESIGN_GEOMETRY_LIMITS.vectorSize)
+    .describe("Up to 100,000 for editable vector paths; up to 5,000 for other layers."),
 });
 const gridTrack = z.discriminatedUnion("unit", [
   z.object({ unit: z.literal("fr"), value: number.min(0.1).max(100) }).strict(),
@@ -371,7 +381,7 @@ const baseNodeSchema = z
       })
       .strict()
       .optional(),
-    box,
+    box: layerBox,
     tokenBindings: tokenBindingsSchema.optional(),
     style: style.default({}),
     text: z.string().max(10000).optional(),
@@ -568,7 +578,7 @@ export const componentVariantsSchema = z
     (value) => Object.hasOwn(value.options, value.default),
     "Default variant must exist in options.",
   );
-export const designNodeSchema = baseNodeSchema.extend({
+const nodeFieldsSchema = baseNodeSchema.extend({
   variants: componentVariantsSchema
     .optional()
     .describe(
@@ -579,7 +589,9 @@ export const designNodeSchema = baseNodeSchema.extend({
     .describe("Selected variant on a component or instance. Omit to follow the master's default."),
 });
 
-export const designNodeChangesSchema = designNodeSchema
+export const designNodeSchema = nodeFieldsSchema.superRefine(checkLayerSize);
+
+export const designNodeChangesSchema = nodeFieldsSchema
   .pick({
     vectorPath: true,
     tokenBindings: true,
@@ -634,7 +646,7 @@ export const designNodeChangesSchema = designNodeSchema
   .partial()
   .extend({
     // Zod applies inner defaults even inside optional fields. Edits must never apply creation defaults.
-    box: box.partial().optional(),
+    box: layerBox.partial().optional(),
     style: style.optional(),
     visible: z.boolean().optional(),
     locked: z.boolean().optional(),

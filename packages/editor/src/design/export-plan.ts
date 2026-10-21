@@ -26,17 +26,18 @@ export function exportRoots(document: DesignDocument, ids: readonly string[]) {
   if (roots.some((n) => !n.visible)) throw new Error("Show selected layers before exporting them.");
   return roots;
 }
-export function exportDimensions(bounds: ExportBounds, scale: number) {
+export function exportDimensions(
+  bounds: ExportBounds,
+  scale: number,
+  format: ExportFormat = "png",
+) {
   if (!Number.isFinite(scale) || scale < 0.25 || scale > 4)
     throw new Error("Choose an export scale between 0.25× and 4×.");
   const width = Math.max(1, Math.ceil(bounds.width * scale)),
     height = Math.max(1, Math.ceil(bounds.height * scale));
-  if (
-    !Number.isFinite(width + height) ||
-    width > 16384 ||
-    height > 16384 ||
-    width * height > 64_000_000
-  )
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height))
+    throw new Error("Export dimensions must be finite and within the supported coordinate range.");
+  if (format !== "svg" && (width > 16384 || height > 16384 || width * height > 64_000_000))
     throw new Error(
       "Export exceeds 64 megapixels or 16,384 pixels on one side. Choose a smaller scale.",
     );

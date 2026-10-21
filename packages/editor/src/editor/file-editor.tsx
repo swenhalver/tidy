@@ -190,7 +190,9 @@ import { FontRecovery } from "./font-recovery";
 import { ImportNotes } from "./import-notes";
 import { setImportNoteStatus, type ImportNoteStatus } from "../design/import-notes";
 import { VectorEditor } from "./vector-editor";
-import { PenEditor } from "./pen-editor";
+import { createPenPath } from "../design/pen-path";
+import { layerSizeLimit } from "@tidy/design/document-limits";
+import { PenEditor, type PenFinishResult } from "./pen-editor";
 import {
   parsePathContours,
   serializeContours,
@@ -1157,8 +1159,8 @@ export function FileEditor({
     nextSelection?: string | null | string[],
     base?: Snapshot,
     sourceNodeId?: string,
-  ) {
-    if (readOnly) return;
+  ): Promise<{ kind: "committed" } | { kind: "unchanged" } | { kind: "rejected" }> {
+    if (readOnly) return { kind: "rejected" };
     const before = base ?? room.getSnapshot();
     const beforeSelection = selection;
     const completingPreview = room.getPreview();
@@ -1173,13 +1175,13 @@ export function FileEditor({
       patch = diffDocument(before.content, content);
     } catch (cause) {
       reportError(cause, "Could not change layers.");
-      return;
+      return { kind: "rejected" };
     }
     if (!patch.length) {
       // A gesture can finish unchanged before its final preview frame runs.
       room.restore();
       room.clearPreview(completingPreview);
-      return;
+      return { kind: "unchanged" };
     }
     pendingCountRef.current++;
     busyRef.current = true;
@@ -1204,8 +1206,10 @@ export function FileEditor({
         pageId: currentPageId,
       });
       await committed;
+      return { kind: "committed" };
     } catch (cause) {
       reportError(cause, "Could not change layers.");
+      return { kind: "rejected" };
     } finally {
       pendingCountRef.current--;
       busyRef.current = pendingCountRef.current > 0;
@@ -2024,6 +2028,9 @@ export function FileEditor({
     const bounds = boundingBox(gesture.ids.map((id) => gesture.boxes.get(id)!).filter(Boolean));
     if (!bounds) throw new Error("Select layers to resize.");
     const target = resizeBox(bounds, handle, delta, {
+      maxSize: Math.max(
+        ...nodes.filter((node) => gesture.ids.includes(node.id)).map(layerSizeLimit),
+      ),
       centered,
       aspect,
       snap: viewPreferences.snapPixels,
@@ -2827,36 +2834,13 @@ export function FileEditor({
     }
   }
 
-  function finishPen(contour: VectorContour, parentId: string | null, pageId: string) {
-    const all = contour.points.flatMap((p) => [
-      p,
-      ...(p.in ? [p.in] : []),
-      ...(p.out ? [p.out] : []),
-    ]);
-    const x = Math.min(...all.map((p) => p.x)),
-      y = Math.min(...all.map((p) => p.y));
-    const width = Math.max(1, Math.max(...all.map((p) => p.x)) - x),
-      height = Math.max(1, Math.max(...all.map((p) => p.y)) - y);
-    if (width > 5000 || height > 5000) {
-      setError(
-        "The path and its curve handles must fit within 5,000 × 5,000 canvas units. Press Backspace to remove the last point, then try again.",
-      );
-      return false;
-    }
-    const shift = (p: Point) => ({ x: p.x - x, y: p.y - y });
-    const contours = [
-      {
-        ...contour,
-        points: contour.points.map((p) => ({
-          ...p,
-          ...shift(p),
-          in: p.in ? shift(p.in) : undefined,
-          out: p.out ? shift(p.out) : undefined,
-        })),
-      },
-    ];
+  async function finishPen(
+    contour: VectorContour,
+    parentId: string | null,
+    pageId: string,
+  ): Promise<PenFinishResult> {
     const id = crypto.randomUUID();
-    void changeDocument((content) => {
+    const result = await changeDocument((content) => {
       const parent = content.nodes.find((n) => n.id === parentId);
       if (
         pageId !== currentPageId ||
@@ -2867,38 +2851,10 @@ export function FileEditor({
             nodePageId(parent) !== pageId))
       )
         throw new Error("The path's page or parent is no longer editable.");
-      const node: DesignNode = {
-        id,
-        parentId,
-        pageId,
-        name: "Path",
-        type: "vector",
-        box: { x, y, width, height },
-        vectorPath: {
-          d: serializeContours(contours),
-          contours,
-          viewBox: { x: 0, y: 0, width, height },
-          fillRule: "nonzero",
-        },
-        style: {
-          paints: [],
-          strokePaints: [
-            { id: crypto.randomUUID(), type: "solid", color: "#111111", opacity: 1, visible: true },
-          ],
-          borderWidth: 2,
-          strokeCap: "round",
-          strokeJoin: "round",
-        },
-        layout: "absolute",
-        positionMode: parentId ? "absolute" : undefined,
-        visible: true,
-        locked: false,
-      };
+      const node = createPenPath({ id, contour, parentId, pageId });
       return { ...content, nodes: [...content.nodes, node] };
     }, id);
-    setTool("select");
-    setVectorMode(id);
-    return true;
+    return result.kind === "committed" ? { kind: "committed", nodeId: id } : { kind: "rejected" };
   }
 
   function beginCanvasGesture(event: PointerEvent<HTMLDivElement>) {
@@ -4409,7 +4365,9 @@ export function FileEditor({
                 fileId={fileId}
                 local={local}
                 loadLocalSource={localPersistence?.loadLibrary}
-                onDocument={changeDocument}
+                onDocument={async (update) => {
+                  await changeDocument(update);
+                }}
               />
             )}
           </div>
@@ -4805,12 +4763,17 @@ export function FileEditor({
             )}
           {tool === "pen" && !readOnly && !prototypeMode && (
             <PenEditor
+              key={currentPageId}
               viewport={viewport}
               nodes={nodes}
               view={view}
               pageId={currentPageId}
               spaceHeld={spaceHeld}
               onFinish={finishPen}
+              onComplete={(id) => {
+                setTool("select");
+                setVectorMode(id);
+              }}
               onCancel={() => setTool("select")}
             />
           )}

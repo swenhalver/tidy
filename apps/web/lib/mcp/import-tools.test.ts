@@ -55,7 +55,9 @@ describe("MCP rendered import tools", () => {
     const { call } = setup();
     const response = await call("get_import_guidance");
     const data = JSON.parse(JSON.stringify(response.structuredContent));
-    expect(data.nodeSchema.properties.type.enum).toContain("vector");
+    const type = data.nodeSchema.properties.type;
+    const resolvedType = type.$ref ? data.nodeSchema.$defs[type.$ref.split("/").at(-1)] : type;
+    expect(resolvedType.enum).toContain("vector");
     expect(data.captureSchema.properties.assets).toBeDefined();
     expect(data.capabilities.serverBrowserCapture).toBe(false);
   });

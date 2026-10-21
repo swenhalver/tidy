@@ -94,8 +94,13 @@ export async function createSelectionExport(
     group,
     bounds: selectionBounds(group, elements, document, nodes),
   }));
-  const dimensions = plans.map((plan) => exportDimensions(plan.bounds, request.scale));
-  if (dimensions.reduce((sum, size) => sum + size.width * size.height, 0) > 128_000_000)
+  const dimensions = plans.map((plan) =>
+    exportDimensions(plan.bounds, request.scale, request.format),
+  );
+  if (
+    request.format !== "svg" &&
+    dimensions.reduce((sum, size) => sum + size.width * size.height, 0) > 128_000_000
+  )
     throw new Error("The batch exceeds 128 megapixels. Choose fewer layers or a smaller scale.");
   const ids = new Set(roots.flatMap((root) => [...componentSubtreeIds(document.nodes, root.id)]));
   const text = document.nodes.filter((n) => ids.has(n.id) && n.visible && n.type === "text");
