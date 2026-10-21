@@ -1,3 +1,4 @@
+import { reportHandledError } from "@/lib/handled-error";
 import { RequestBodyError } from "@/lib/http/request-body";
 import "server-only";
 import { auth } from "@/lib/auth";
@@ -66,6 +67,7 @@ export function privacyFailure(error: unknown) {
     error instanceof PrivacyError ||
     error instanceof PersonalBudgetError ||
     error instanceof RequestBodyError;
+  if (!known || error.status >= 500 || Object.hasOwn(error, "cause")) reportHandledError(error);
   if (!known) console.error(JSON.stringify({ event: "privacy_request_failed" }));
   return Response.json(
     {

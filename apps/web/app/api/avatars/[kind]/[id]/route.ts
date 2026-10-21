@@ -1,3 +1,4 @@
+import { reportHandledError } from "@/lib/handled-error";
 import {
   operationBudgetResponse,
   operationFailure,
@@ -27,6 +28,7 @@ function failure(error: unknown) {
       { error: error.message },
       { status: error.status, headers: { "Cache-Control": "no-store" } },
     );
+  reportHandledError(error);
   console.error("Avatar request failed", error);
   return Response.json(
     { error: "Could not update the image. Please try again." },

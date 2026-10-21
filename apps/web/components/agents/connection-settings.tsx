@@ -1,5 +1,7 @@
 "use client";
 
+import { useErrorNotice } from "@/lib/use-error-notice";
+import { UserFacingError } from "@tidy/ui/errors";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,17 +16,21 @@ import { readJsonResponse } from "@/lib/http/json-response";
 export function AgentConnectionSettings({ initial }: { initial: ConnectionStatus }) {
   const [connection, setConnection] = useState(initial);
   const [login, setLogin] = useState<NativeLogin | null>(null);
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [, setError] = useErrorNotice("", "integration_update");
   useEffect(() => {
     if (!login) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const started = Date.now();
+    let notifyError = setError("");
+    let failing = false;
     const poll = async () => {
       if (Date.now() - started > 10 * 60_000) {
+        notifyError.dismiss();
+        const notifyExpired = setError("");
+        notifyExpired("Sign-in expired. Connect again to get a new code.");
         setLogin(null);
-        setError("Sign-in expired. Connect again to get a new code.");
         return;
       }
       try {
@@ -38,13 +44,21 @@ export function AgentConnectionSettings({ initial }: { initial: ConnectionStatus
           message: "Could not check Codex connection.",
         });
         if (controller.signal.aborted) return;
+        if (failing) {
+          notifyError.dismiss();
+          notifyError = setError("");
+          failing = false;
+        }
         setConnection(data);
         if (data.status === "connected") {
           setLogin(null);
           return;
         }
-      } catch {
+      } catch (cause) {
         if (controller.signal.aborted) return;
+        if (!failing)
+          notifyError(new UserFacingError("Could not check the connection. Retrying…", { cause }));
+        failing = true;
       }
       timer = setTimeout(poll, 2500);
     };
@@ -52,11 +66,13 @@ export function AgentConnectionSettings({ initial }: { initial: ConnectionStatus
     return () => {
       controller.abort();
       clearTimeout(timer);
+      notifyError.dismiss();
     };
-  }, [login]);
+  }, [login, setError]);
   async function connect() {
+    const notifyError = setError("");
     setBusy(true);
-    setError("");
+
     try {
       const response = await fetch("/api/agents/connection", { method: "POST" });
       const data = await readJsonResponse({
@@ -67,21 +83,22 @@ export function AgentConnectionSettings({ initial }: { initial: ConnectionStatus
       setLogin(data);
       setConnection((current) => ({ ...current, status: "connecting" }));
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not connect Codex.");
+      notifyError(error, "Could not connect Codex.");
     } finally {
       setBusy(false);
     }
   }
   async function disconnect() {
+    const notifyError = setError("");
     setBusy(true);
-    setError("");
+
     try {
       const response = await fetch("/api/agents/connection", { method: "DELETE" });
       await readJsonResponse({ response, schema: agentOkSchema, message: "Could not disconnect." });
       setLogin(null);
       setConnection((current) => ({ ...current, status: "disconnected", accountLabel: null }));
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not disconnect.");
+      notifyError(error, "Could not disconnect.");
     } finally {
       setBusy(false);
     }
@@ -168,11 +185,6 @@ export function AgentConnectionSettings({ initial }: { initial: ConnectionStatus
             </p>
           )}
         </>
-      )}
-      {error && (
-        <p role="alert" className="text-sm text-danger">
-          {error}
-        </p>
       )}
     </section>
   );

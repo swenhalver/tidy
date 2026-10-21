@@ -1,4 +1,6 @@
 "use client";
+import { useEditorErrorNotice } from "../../editor/use-error-notice";
+import { UserFacingError } from "@tidy/ui/errors";
 
 import { NavigationLink as Link } from "../../host-navigation";
 import { threadsPage } from "../workspace/page-layout";
@@ -69,8 +71,9 @@ export function ThreadsWorkspace({
   const [prompt, setPrompt] = useAgentDraft(
     `tidy:agent-draft:${userId}:${organizationId}:${selected ?? fileId ?? "new"}`,
   );
-  const [error, setError] = useState(""),
+  const [, setError] = useEditorErrorNotice(),
     [busy, setBusy] = useState(false);
+  const [pollError, setPollError] = useEditorErrorNotice("user_action", "inline");
   const [allowOrganizationChanges, setAllowOrganizationChanges] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [renaming, setRenaming] = useState(false);
@@ -122,6 +125,8 @@ export function ThreadsWorkspace({
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     let lastList = 0;
+    let reconnecting = false;
+    setPollError("");
     const poll = async () => {
       try {
         if (Date.now() - lastList >= 5000) {
@@ -185,9 +190,16 @@ export function ThreadsWorkspace({
             if (data.events.length) await loadThread(id, controller.signal);
           }
         }
+        if (!controller.signal.aborted && reconnecting) {
+          reconnecting = false;
+          setPollError("");
+        }
       } catch (error) {
-        if (!controller.signal.aborted)
-          setError(error instanceof Error ? error.message : "Reconnecting…");
+        if (!controller.signal.aborted && !reconnecting) {
+          reconnecting = true;
+          const notifyError = setPollError("");
+          notifyError(new UserFacingError("Reconnecting…", { cause: error }));
+        }
       }
       if (!controller.signal.aborted) timer = setTimeout(poll, 1000);
     };
@@ -196,19 +208,25 @@ export function ThreadsWorkspace({
       controller.abort();
       clearTimeout(timer);
     };
-  }, [organizationId, fileId, scope, loadThread]);
+  }, [organizationId, fileId, scope, loadThread, setPollError]);
   function openThread(id: string | null) {
     selectedRef.current = id;
     setSelected(id);
     setSnapshot(id ? (cache.current.get(id) ?? null) : null);
     setError("");
-    if (id) void loadThread(id).catch((error) => setError(error.message));
+    if (id)
+      void loadThread(id).catch((error) =>
+        setError(error, "Could not complete the action. Please try again."),
+      );
   }
   useEffect(() => {
     if (!openThreadId) return;
-    void loadThread(openThreadId).catch((error) => setError(error.message));
-  }, [openThreadId, loadThread]);
+    void loadThread(openThreadId).catch((error) =>
+      setError(error, "Could not complete the action. Please try again."),
+    );
+  }, [openThreadId, loadThread, setError]);
   async function send() {
+    const notifyError = setError("");
     const content = prompt.trim();
     if (!content || busy || (selected && snapshot?.thread.id !== selected)) return;
     const steering = active && ownsRun;
@@ -225,7 +243,7 @@ export function ThreadsWorkspace({
     });
     if (requestRef.current?.key !== key) requestRef.current = { key, id: crypto.randomUUID() };
     setBusy(true);
-    setError("");
+
     try {
       const response = await fetch(
         steering ? `/api/agents/runs/${run!.id}` : "/api/agents/threads",
@@ -274,15 +292,16 @@ export function ThreadsWorkspace({
       }
       if (selectedRef.current) await loadThread(selectedRef.current);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not send your message.");
+      notifyError(error, "Could not send your message.");
     } finally {
       setBusy(false);
     }
   }
   async function stop() {
+    const notifyError = setError("");
     if (!run) return;
     setBusy(true);
-    setError("");
+
     try {
       const response = await fetch(`/api/agents/runs/${run.id}`, { method: "DELETE" });
       await readJsonResponse({
@@ -292,12 +311,13 @@ export function ThreadsWorkspace({
       });
       await loadThread(run.threadId);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not stop the run.");
+      notifyError(error, "Could not stop the run.");
     } finally {
       setBusy(false);
     }
   }
   async function moreThreads() {
+    const notifyError = setError("");
     const requestedScope = scope;
     const cursor = (olderThreads.at(-1) ?? threads.at(-1))?.cursor;
     if (!cursor || loadingOlder) return;
@@ -318,12 +338,13 @@ export function ThreadsWorkspace({
       ]);
       setHasMoreThreads(data.threads.length === 50);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not load older threads.");
+      notifyError(error, "Could not load older threads.");
     } finally {
       setLoadingOlder(false);
     }
   }
   async function rename() {
+    const notifyError = setError("");
     const id = selected,
       title = titleDraft.trim();
     setRenaming(false);
@@ -337,10 +358,11 @@ export function ThreadsWorkspace({
       if (!response.ok) throw new Error("Could not rename the thread.");
       await loadThread(id);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not rename the thread.");
+      notifyError(error, "Could not rename the thread.");
     }
   }
   async function older() {
+    const notifyError = setError("");
     if (!snapshot || !selected) return;
     const id = selected,
       before = snapshot.messages[0]?.sequence;
@@ -367,8 +389,8 @@ export function ThreadsWorkspace({
           cache.current.set(id, next);
           return next;
         });
-    } catch {
-      setError("Could not load earlier messages.");
+    } catch (cause) {
+      notifyError(cause, "Could not load earlier messages.");
     }
   }
   return (
@@ -609,11 +631,12 @@ export function ThreadsWorkspace({
                     : "The run could not finish. Completed edits remain. Send a new prompt to continue."}
             </p>
           )}
-          {error && (
-            <p role="alert" className="py-2 text-xs text-danger">
-              {error}
+          {pollError && (
+            <p data-ph-public role="status" className="py-2 text-xs text-secondary-ink">
+              {pollError}
             </p>
           )}
+
           {canEdit && (
             <form
               className="shrink-0 border-t border-primary-grey pt-3"

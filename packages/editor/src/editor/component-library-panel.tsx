@@ -1,4 +1,7 @@
 "use client";
+import { useEditorErrorNotice } from "./use-error-notice";
+import { UserFacingError } from "@tidy/ui/errors";
+import { readJsonResponse, responseError } from "../lib/http/json-response";
 import { z } from "zod";
 import { useState } from "react";
 import { parseDesignDocument, type DesignDocument, type DesignNode } from "../design/document";
@@ -18,18 +21,21 @@ async function loadSource(fileUid: string): Promise<Source> {
   const url = new URL(fileUid, window.location.href);
   const candidate = url.pathname.split("/").filter(Boolean).at(-1) ?? fileUid;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate))
-    throw new Error("Enter a file URL or file ID.");
+    throw new UserFacingError("Enter a file URL or file ID.");
   const response = await fetch(`/api/files/${encodeURIComponent(candidate)}/snapshot`, {
     cache: "no-store",
   });
-  if (!response.ok) throw new Error("Source file is unavailable or access was removed.");
-  const source = z
-    .object({
+  if (!response.ok)
+    throw responseError(response, undefined, "Source file is unavailable or access was removed.");
+  const source = await readJsonResponse({
+    response,
+    schema: z.object({
       name: z.string(),
       document: z.object({ revision: z.number().int().min(0), content: z.unknown() }).nullable(),
-    })
-    .parse(await response.json());
-  if (!source.document) throw new Error("Source file has no editable document.");
+    }),
+    message: "Source file is unavailable or access was removed.",
+  });
+  if (!source.document) throw new UserFacingError("Source file has no editable document.");
   return {
     fileUid: candidate,
     name: source.name,
@@ -57,7 +63,7 @@ export function ComponentLibraryPanel({
     [replaceId, setReplaceId] = useState<string | undefined>(),
     [expanded, setExpanded] = useState(false),
     [busy, setBusy] = useState<string | null>(null),
-    [error, setError] = useState("");
+    [, setError] = useEditorErrorNotice();
   async function transfer(payload: DesignClipboard) {
     const ids = clipboardAssetIds(payload);
     if (local || payload.sourceFile === fileId || !ids.length) return payload;
@@ -74,24 +80,26 @@ export function ComponentLibraryPanel({
     return remapClipboardAssets(payload, result.assets);
   }
   async function lookup() {
+    const notifyError = setError("");
     setBusy("lookup");
-    setError("");
+
     try {
       const loaded = await (loadLocalSource ?? loadSource)(input);
-      if (loaded.fileUid === fileId) throw new Error("Choose a different source file.");
+      if (loaded.fileUid === fileId) throw new UserFacingError("Choose a different source file.");
       setSource(loaded);
       setSelected(loaded.content.nodes.find((n) => n.isComponent && !n.librarySource)?.id ?? "");
     } catch (cause) {
       setSource(null);
-      setError(cause instanceof Error ? cause.message : "Source unavailable.");
+      notifyError(cause, "Source unavailable.");
     } finally {
       setBusy(null);
     }
   }
   async function link() {
+    const notifyError = setError("");
     if (!source || !selected) return;
     setBusy("link");
-    setError("");
+
     try {
       const payload = await transfer(libraryPayload(source.content, selected, source.fileUid));
       await onDocument(
@@ -107,19 +115,20 @@ export function ComponentLibraryPanel({
       setReplaceId(undefined);
       setExpanded(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Library could not be linked.");
+      notifyError(cause, "Library could not be linked.");
     } finally {
       setBusy(null);
     }
   }
   async function check(component: DesignNode, apply: boolean) {
+    const notifyError = setError("");
     const identity = component.librarySource!;
     setBusy(component.id);
-    setError("");
+
     try {
       const loaded = await (loadLocalSource ?? loadSource)(identity.fileUid);
       if (!loaded.content.nodes.some((n) => n.id === identity.componentId && n.isComponent))
-        throw new Error("Library component was removed.");
+        throw new UserFacingError("Library component was removed.");
       if (apply) {
         const payload = await transfer(
           libraryPayload(loaded.content, identity.componentId, loaded.fileUid),
@@ -157,7 +166,7 @@ export function ComponentLibraryPanel({
       await onDocument((doc) =>
         markLibraryStatus(doc, component.id, "unavailable", undefined, identity),
       );
-      setError(cause instanceof Error ? cause.message : "Source unavailable.");
+      notifyError(cause, "Source unavailable.");
     } finally {
       setBusy(null);
     }
@@ -312,11 +321,6 @@ export function ComponentLibraryPanel({
               </>
             )}
           </div>
-        )}
-        {error && (
-          <p role="alert" className="text-danger">
-            {error}
-          </p>
         )}
       </div>
     </details>

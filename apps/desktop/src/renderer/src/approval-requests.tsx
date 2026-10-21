@@ -1,3 +1,5 @@
+import { useErrorNotice } from "@tidy/ui/use-error-notice";
+import { errorMessage, UserFacingError } from "@tidy/ui/errors";
 import { useState } from "react";
 import { Button } from "@tidy/ui/button";
 import type { ApprovalRequest, ApprovalDecision } from "../../shared/permissions";
@@ -15,18 +17,22 @@ export function ApprovalRequests({
   onRespond(id: string, decision: ApprovalDecision): Promise<void>;
 }) {
   const [pending, setPending] = useState<string[]>([]);
-  const [error, setError] = useState<{ id: string; text: string }>();
+  const [, setError] = useErrorNotice();
   async function respond(id: string, decision: ApprovalDecision) {
+    const notifyError = setError("");
     if (pending.includes(id)) return;
     setPending((current) => [...current, id]);
-    setError(undefined);
+
     try {
       await onRespond(id, decision);
     } catch (value) {
-      setError({
-        id,
-        text: value instanceof Error ? value.message : "The response could not be sent.",
-      });
+      const title = requests.find((request) => request.id === id)?.title ?? "Permission request";
+      notifyError(
+        new UserFacingError(
+          `“${title}”: ${errorMessage(value, "The response could not be sent. Please try again.")}`,
+          { cause: value },
+        ),
+      );
     } finally {
       setPending((current) => current.filter((value) => value !== id));
     }
@@ -41,11 +47,6 @@ export function ApprovalRequests({
             {request.details && <pre tabIndex={0}>{request.details}</pre>}
             {request.reason && <p>{request.reason}</p>}
             {request.shortened && <small>Request shortened</small>}
-            {error?.id === request.id && (
-              <p role="alert" className="thread-error">
-                {error.text}
-              </p>
-            )}
           </div>
           <div className="approval-actions">
             {request.choices.map((decision) => (

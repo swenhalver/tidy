@@ -1,3 +1,4 @@
+import { reportHandledError } from "@/lib/handled-error";
 import { auth } from "@/lib/auth";
 import { githubConfig } from "./config";
 import { GitHubError } from "./client";
@@ -43,6 +44,16 @@ export function apiError(error: unknown) {
     error instanceof ImageCapacityError
   )
     return imageFailureResponse(error);
+  const expected =
+    error instanceof ZodError ||
+    error instanceof GitHubRequestError ||
+    error instanceof OrganizationAccessError ||
+    error instanceof OAuthSessionError ||
+    error instanceof GitHubWorkLimitError ||
+    error instanceof RequestBodyError ||
+    error instanceof GitHubHistoryLimitError ||
+    (error instanceof GitHubError && [401, 403, 404].includes(error.status));
+  if (!expected || Object.hasOwn(error, "cause")) reportHandledError(error);
   const message = publicGitHubMessage(error);
   return Response.json(
     { error: message },

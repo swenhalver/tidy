@@ -1,4 +1,6 @@
 "use client";
+import { useEditorErrorNotice } from "./use-error-notice";
+import { errorMessage } from "@tidy/ui/errors";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   fileVersionListSchema,
@@ -118,9 +120,11 @@ export function FileVersionControl({
   const [preview, setPreview] = useState<VersionPreview | null>(null),
     [frameId, setFrameId] = useState("");
   const [name, setName] = useState(""),
-    [error, setError] = useState(""),
+    [, setError] = useEditorErrorNotice(),
     [pending, setPending] = useState(false),
     [imageFailed, setImageFailed] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const selection = useRef(versionId);
   useLayoutEffect(() => {
     selection.current = versionId;
@@ -145,10 +149,24 @@ export function FileVersionControl({
           : next,
       );
       setVersionId((current) => current || next.versions[0]?.id || "");
+      setHistoryError("");
       return next;
     },
     [base],
   );
+  async function loadHistory() {
+    const notifyError = setError("");
+    setHistoryError("");
+    setLoadingHistory(true);
+    try {
+      await load();
+    } catch (cause) {
+      setHistoryError(errorMessage(cause, "Could not read file history."));
+      notifyError(cause, "Could not read file history.");
+    } finally {
+      setLoadingHistory(false);
+    }
+  }
   useEffect(() => {
     let active = true;
     void api(fileVersionListSchema, base).then(
@@ -187,21 +205,22 @@ export function FileVersionControl({
       (cause) => {
         if (request === requests.current) {
           setPreview(null);
-          setError(cause instanceof Error ? cause.message : "Could not read version.");
+          setError(cause, "Could not read version.");
         }
       },
     );
     return () => {
       invalidateRequests();
     };
-  }, [base, versionId, open, invalidateRequests]);
+  }, [base, versionId, open, invalidateRequests, setError]);
   async function create() {
+    const notifyError = setError("");
     const submitted = name.trim(),
       selected = selection.current,
       interaction = interactions.current;
     if (!submitted) return;
     setPending(true);
-    setError("");
+
     try {
       const result = await api(
         z.object({ id: z.string() }),
@@ -214,24 +233,23 @@ export function FileVersionControl({
         if (selection.current === selected) setVersionId(result.id);
       }
     } catch (cause) {
-      if (interactions.current === interaction)
-        setError(cause instanceof Error ? cause.message : "Could not create version.");
+      if (interactions.current === interaction) notifyError(cause, "Could not create version.");
     } finally {
       setPending(false);
     }
   }
   async function restore() {
+    const notifyError = setError("");
     if (!preview || preview.version.id !== versionId) return;
     const interaction = interactions.current;
     setPending(true);
-    setError("");
+
     try {
       await onRestore(versionId, preview.currentRevision);
       await load();
       if (interactions.current === interaction) setOpen(false);
     } catch (cause) {
-      if (interactions.current === interaction)
-        setError(cause instanceof Error ? cause.message : "Could not restore version.");
+      if (interactions.current === interaction) notifyError(cause, "Could not restore version.");
     } finally {
       setPending(false);
     }
@@ -268,11 +286,8 @@ export function FileVersionControl({
             return;
           }
           interactions.current++;
-          setError("");
           setOpen(true);
-          void load().catch((cause) =>
-            setError(cause instanceof Error ? cause.message : "Could not read file history."),
-          );
+          void loadHistory();
         }}
       />
       <Dialog
@@ -319,10 +334,26 @@ export function FileVersionControl({
               </button>
             </div>
           )}
-          {!list && !error && (
+          {!list && !historyError && (
             <p data-ph-public role="status" className="text-xs text-secondary-ink">
               Loading history…
             </p>
+          )}
+          {!list && historyError && (
+            <div className="space-y-2">
+              <p role="alert" className="text-xs text-danger">
+                {historyError}
+              </p>
+              <button
+                data-ph-public
+                type="button"
+                className={button}
+                disabled={loadingHistory}
+                onClick={() => void loadHistory()}
+              >
+                Retry history
+              </button>
+            </div>
           )}
           {!!list?.versions.length && (
             <SelectMenu
@@ -347,13 +378,12 @@ export function FileVersionControl({
               type="button"
               className={button}
               disabled={pending}
-              onClick={() =>
+              onClick={() => {
+                const notifyError = setError("");
                 void load(list.nextCursor!).catch((cause) =>
-                  setError(
-                    cause instanceof Error ? cause.message : "Could not read older versions.",
-                  ),
-                )
-              }
+                  notifyError(cause, "Could not read older versions."),
+                );
+              }}
             >
               Older versions
             </button>
@@ -425,11 +455,6 @@ export function FileVersionControl({
           {pending && (
             <p data-ph-public role="status" className="text-xs">
               Updating history…
-            </p>
-          )}
-          {error && (
-            <p role="alert" className="text-xs text-danger">
-              {error}
             </p>
           )}
         </div>
