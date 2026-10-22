@@ -158,6 +158,104 @@ test("follow-ups persist outside the transcript and run in order with the same s
   ).toEqual(["First task", "Second", "Third"]);
 });
 
+test("queued design context survives persistence and edits before automatic delivery", async () => {
+  const { service, store, project, thread, runs, read, action, waitForRun } = await fixture();
+  const file = await store.createDesign(project.id);
+  const designContext = {
+    fileId: file.id,
+    pageId: file.document.pages![0].id,
+    nodeIds: [file.document.nodes[0].id],
+    version: file.version,
+  };
+  const messageId = randomUUID();
+  await service.sendMessage({
+    projectId: project.id,
+    threadId: thread.id,
+    messageId,
+    text: "Improve this frame",
+    delivery: "queue",
+    designContext,
+    designIds: [file.id],
+  });
+  const stored = await store.readThread(project.id, thread.id);
+  expect(stored.queuedMessages?.[0].designContext).toEqual(designContext);
+  expect(stored.queuedMessages?.[0].designIds).toEqual([file.id]);
+  await action({ kind: "edit", messageId, text: "Improve this frame’s spacing" });
+  runs[0].finish();
+  await waitForRun(2);
+  expect(runs[1].input.prompt).toContain(file.path);
+  expect(runs[1].input.prompt).toContain(designContext.nodeIds[0]);
+  expect(runs[1].input.prompt).toEndWith("Improve this frame’s spacing");
+  const delivered = await read();
+  expect(delivered.designIds).toEqual([file.id]);
+  expect(delivered.messages.at(-1)?.designContext).toEqual(designContext);
+  expect(delivered.queuedMessages).toEqual([]);
+});
+
+test("send-now preserves design context through native steering and resumed harness turns", async () => {
+  for (const native of [false, true]) {
+    const { service, store, project, thread, runs, read } = await fixture(native);
+    const file = await store.createDesign(project.id);
+    const designContext = {
+      fileId: file.id,
+      pageId: file.document.pages![0].id,
+      nodeIds: [file.document.nodes[0].id],
+      version: file.version,
+    };
+    await service.sendMessage({
+      projectId: project.id,
+      threadId: thread.id,
+      text: "Use this frame now",
+      delivery: "steer",
+      designContext,
+    });
+    const prompt = native ? runs[0].steers[0].prompt : runs[1].input.prompt;
+    expect(prompt).toContain(file.path);
+    expect(prompt).toContain(designContext.nodeIds[0]);
+    const delivered = await read();
+    expect(delivered.designIds).toEqual([file.id]);
+    expect(delivered.messages.at(-1)?.designContext).toEqual(designContext);
+    expect(delivered.queuedMessages).toEqual([]);
+  }
+});
+
+test("stale queued design context stays recoverable without steering the active agent", async () => {
+  const { service, store, project, thread, runs, read } = await fixture(true);
+  const file = await store.createDesign(project.id);
+  const designContext = {
+    fileId: file.id,
+    pageId: file.document.pages![0].id,
+    nodeIds: [file.document.nodes[0].id],
+    version: file.version,
+  };
+  const queued = await service.sendMessage({
+    projectId: project.id,
+    threadId: thread.id,
+    text: "Use this frame",
+    delivery: "queue",
+    designContext,
+  });
+  await store.updateDesign({
+    projectId: project.id,
+    designId: file.id,
+    expectedVersion: file.version,
+    name: "Changed externally",
+  });
+  const message = queued.queuedMessages![0];
+  await service.updateMessageQueue({
+    projectId: project.id,
+    threadId: thread.id,
+    action: { kind: "steer", messageId: message.id },
+  });
+  const state = await read();
+  expect(state.queueError).toContain("design changed");
+  expect(state.queuedMessages?.[0].designContext).toEqual(designContext);
+  expect(state.messages).toHaveLength(1);
+  expect(runs).toHaveLength(1);
+  expect(runs[0].steers).toHaveLength(0);
+  expect(runs[0].stopped).toBe(false);
+});
+
 test("edit, reorder and remove affect only waiting messages", async () => {
   const { enqueue, action, read, runs, waitForRun } = await fixture();
   await enqueue("Second");
