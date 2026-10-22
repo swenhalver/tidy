@@ -7,7 +7,13 @@ import {
 import { randomUUID } from "node:crypto";
 import { watch, type FSWatcher } from "node:fs";
 import { z } from "zod";
-import type { DesktopAPI, DesktopEvent, Thread, ThreadSummary } from "../shared/contracts";
+import type {
+  DesktopAPI,
+  DesktopEvent,
+  HarnessId,
+  Thread,
+  ThreadSummary,
+} from "../shared/contracts";
 import { findHarness, startHarness, type HarnessUpdate, type RunningHarness } from "./harnesses";
 import {
   attachmentSchema,
@@ -32,6 +38,7 @@ import {
 } from "../shared/message-queue";
 import { ProjectStore } from "./project-store";
 import { readLocalFile } from "./local-files";
+import type { UpdatableHarnessId } from "../shared/harness-updates";
 
 type Job = {
   thread: Thread;
@@ -59,6 +66,8 @@ export class WorkspaceService {
   private cancelledStarts = new Set<string>();
   private designGenerations = new Map<string, number>();
   private closing: symbol | "quit" | undefined;
+  private updatingHarnesses = new Set<UpdatableHarnessId>();
+  private preparingHarnesses = new Map<string, HarnessId>();
 
   constructor(
     readonly store: ProjectStore,
@@ -77,6 +86,24 @@ export class WorkspaceService {
       })
       .catch(() => {});
     return next;
+  }
+
+  /** Guard launches during installation; only an explicitly safe updater may overlap active turns. */
+  reserveHarnessUpdate(
+    id: UpdatableHarnessId,
+    options: { allowActiveRuns?: boolean } = {},
+  ): (() => void) | null {
+    if (
+      this.closing ||
+      this.updatingHarnesses.has(id) ||
+      [...this.preparingHarnesses.values()].some((harness) => harness === id) ||
+      (!options.allowActiveRuns && [...this.jobs.values()].some((job) => job.thread.harness === id))
+    )
+      return null;
+    this.updatingHarnesses.add(id);
+    return () => {
+      this.updatingHarnesses.delete(id);
+    };
   }
 
   subscribe(listener: (event: DesktopEvent) => void) {
@@ -466,24 +493,30 @@ export class WorkspaceService {
     return { executable, context, images, attachments, project };
   }
 
+  /** Reserve preparation before asynchronous work so maintenance cannot race CLI launch. */
   private async run(
     thread: Thread,
     prompt: string,
     attachmentIds: string[] = [],
     messageId?: string,
   ) {
+    if (this.updatingHarnesses.has(thread.harness))
+      throw new Error("This harness is updating. Try again when the update finishes.");
     if (messageId && thread.messages.some((message) => message.id === messageId))
       throw new Error("This message was already sent.");
     if (thread.messages.length >= 998) throw new Error("The thread reached its message limit.");
     this.starting.set(thread.id, thread.projectId);
+    this.preparingHarnesses.set(thread.id, thread.harness);
     try {
       return await this.runPrepared(thread, prompt, attachmentIds, messageId);
     } finally {
+      this.preparingHarnesses.delete(thread.id);
       this.starting.delete(thread.id);
       this.cancelledStarts.delete(thread.id);
     }
   }
 
+  /** Launch a prepared turn while its harness preparation reservation remains held. */
   private async runPrepared(
     thread: Thread,
     prompt: string,

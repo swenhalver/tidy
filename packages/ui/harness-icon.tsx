@@ -1,7 +1,9 @@
 const icons = {
   codex: new URL("./harness-icons/codex.svg", import.meta.url).href,
   claude: new URL("./harness-icons/claude.svg", import.meta.url).href,
+  opencode: new URL("./harness-icons/opencode.svg", import.meta.url).href,
 };
+/** Render an approved provider mark as a decorative mask that inherits the surrounding text color. */
 export function HarnessIcon({
   harness,
   size = 16,

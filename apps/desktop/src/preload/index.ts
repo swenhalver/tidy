@@ -7,7 +7,9 @@ import {
 import { desktopEventSchema } from "../shared/contracts";
 import type { DesktopAPI } from "../shared/contracts";
 import { appUpdateStateSchema } from "../shared/app-updates";
+import { harnessUpdatesSchema } from "../shared/harness-updates";
 
+/** Invoke a workspace operation and validate its response before crossing the preload boundary. */
 async function request<Name extends WorkspaceOperation>(
   name: Name,
   input?: unknown,
@@ -16,6 +18,24 @@ async function request<Name extends WorkspaceOperation>(
 }
 
 const api: DesktopAPI = {
+  /** Validate main-process snapshots before exposing them to the renderer. */
+  harnessUpdates: async () =>
+    harnessUpdatesSchema.parse(await ipcRenderer.invoke("tidy:harness-updates")),
+  /** Request an allowlisted provider update; command construction stays in the main process. */
+  installHarnessUpdate: async (id) => {
+    await ipcRenderer.invoke("tidy:install-harness-update", id);
+  },
+  /** Forward only schema-valid broadcasts and release the IPC listener on unsubscribe. */
+  onHarnessUpdates(listener) {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      const parsed = harnessUpdatesSchema.safeParse(value);
+      if (parsed.success) listener(parsed.data);
+    };
+    ipcRenderer.on("tidy:harness-updates", receive);
+    return () => {
+      ipcRenderer.removeListener("tidy:harness-updates", receive);
+    };
+  },
   updateState: async () =>
     appUpdateStateSchema.parse(await ipcRenderer.invoke("tidy:update-state")),
   checkUpdates: async () => {

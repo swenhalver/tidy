@@ -62,7 +62,8 @@ await writeFile(
     ],
   }),
 );
-for (const name of ["codex", "claude"]) {
+// Cover every discovered provider so a developer's installed CLI cannot overwrite synthetic states.
+for (const name of ["codex", "claude", "opencode"]) {
   const path = join(bin, name);
   await copyFile(new URL("../src/main/fixtures/harness.mjs", import.meta.url), path);
   await chmod(path, 0o700);
@@ -132,6 +133,10 @@ app.on("browser-window-created", (_event, window) => {
         api("readThread", projectId, "../../outside"),
         /Invalid desktop request/,
       );
+      await assert.rejects(
+        api("installHarnessUpdate", "codex; echo bad"),
+        /Invalid harness update request/,
+      );
       await assert.rejects(api("readThread", randomUUID(), randomUUID()), /Open this project/);
       await assert.rejects(
         api("startThread", {
@@ -162,12 +167,110 @@ app.on("browser-window-created", (_event, window) => {
       );
       assert.equal(denied.ok, false);
       assert.match(denied.error, /Untrusted desktop request/);
-      for (const name of ["update-state", "check-updates", "install-update"]) {
+      for (const name of [
+        "update-state",
+        "check-updates",
+        "install-update",
+        "harness-updates",
+        "install-harness-update",
+      ]) {
         const message = await foreign.webContents.executeJavaScript(
           `window.probe.invoke(${JSON.stringify(name)}).then(()=>null,error=>error.message)`,
         );
         assert.match(message, /Untrusted desktop request/);
       }
+
+      // Synthetic states exercise the real grouped notice without upgrading a CLI.
+      const harnessNotice = {
+        id: "codex",
+        status: "available",
+        installedVersion: "0.1.0",
+        latestVersion: "0.2.0",
+        canInstall: true,
+      };
+      const otherNotices = ["claude", "opencode"].map((id) => ({ ...harnessNotice, id }));
+      page.send("tidy:harness-updates", [harnessNotice, ...otherNotices]);
+      await wait("document.querySelector('[aria-label=\"Update Codex\"]')!==null");
+      assert.equal(await evaluate("document.querySelectorAll('.harness-update-notice').length"), 1);
+      assert.equal(
+        await evaluate("document.querySelectorAll('.harness-update-row .harness-icon').length"),
+        3,
+      );
+      assert.equal(await evaluate("document.querySelectorAll('.tidy-toast-viewport').length"), 1);
+      const notices = await evaluate(`(() => {
+        const bounds = document.querySelector('.tidy-toast-viewport').getBoundingClientRect();
+        return { right: innerWidth - bounds.right, bottom: innerHeight - bounds.bottom };
+      })()`);
+      assert.equal(notices.right, 20);
+      assert.equal(notices.bottom, 20);
+      await evaluate("document.querySelector('[aria-label=\"Update Codex\"]').click();true");
+      await wait("document.body.textContent.includes('Couldn’t start the update')");
+      page.send("tidy:harness-updates", [
+        { ...harnessNotice, status: "queued", waitReason: "turn" },
+        ...otherNotices,
+      ]);
+      await wait("document.querySelector('[data-harness=codex][data-state=queued]')!==null");
+      assert.equal(
+        await evaluate(
+          "document.querySelector('[data-harness=codex] .harness-update-spinner')===null",
+        ),
+        true,
+      );
+      assert.equal(
+        await evaluate(
+          "document.querySelector('[data-harness=codex]').textContent.includes('After its active responses')",
+        ),
+        true,
+      );
+      page.send("tidy:harness-updates", [
+        { ...harnessNotice, status: "installing" },
+        ...otherNotices.map((entry) => ({ ...entry, status: "queued", waitReason: "installer" })),
+      ]);
+      await wait("document.querySelector('[data-harness=codex] .harness-update-spinner')!==null");
+      assert.equal(
+        await evaluate("document.querySelectorAll('.harness-update-spinner').length"),
+        1,
+      );
+      assert.equal(
+        await evaluate(
+          "document.querySelector('[data-harness=claude]').textContent.includes('Next in line')",
+        ),
+        true,
+      );
+      assert.equal(
+        await evaluate(`getComputedStyle(document.querySelector('.harness-update-spinner')).animationName ===
+        (matchMedia('(prefers-reduced-motion: reduce)').matches ? 'none' : 'harness-update-spin')`),
+        true,
+      );
+      page.send("tidy:harness-updates", [
+        { ...harnessNotice, status: "error", message: "Fixture update failed." },
+      ]);
+      await wait("document.querySelector('[aria-label=\"Retry updating Codex\"]')!==null");
+      await evaluate(
+        "document.querySelector('[aria-label=\"Dismiss harness updates\"]').click();true",
+      );
+      await wait("document.querySelector('.harness-update-notice')===null");
+      page.send("tidy:harness-updates", [{ ...harnessNotice, status: "installing" }]);
+      await wait("document.querySelector('.harness-update-spinner')!==null");
+      page.send("tidy:harness-updates", [
+        { ...harnessNotice, status: "updated", installedVersion: "0.2.0" },
+      ]);
+      await wait("document.querySelector('[data-harness=codex][data-state=updated]')!==null");
+      assert.equal(
+        await evaluate("document.querySelector('[data-harness=codex] .harness-icon')!==null"),
+        true,
+      );
+      assert.equal(
+        await evaluate(
+          "document.querySelector('[data-harness=codex] .harness-update-state').textContent",
+        ),
+        "Updated",
+      );
+      assert.equal(
+        await evaluate("document.querySelectorAll('.harness-update-spinner').length"),
+        0,
+      );
+      page.send("tidy:harness-updates", []);
 
       // Exercise renderer update-state rendering and its sidebar action with synthetic events.
       assert.equal(await evaluate("document.querySelector('.app-update-button')===null"), true);

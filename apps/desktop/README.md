@@ -33,9 +33,48 @@ The tabs support arrow keys, Home and End.
 
 Tidy uses the installed CLIs and their existing sign-ins. Install and sign in to
 Codex (`codex login`) or Claude Code (`claude auth login`), then use Check connection
-in the composer. Credentials remain owned by each CLI and are never read or copied
-by Tidy. The current integration uses Codex App Server over stdio and Claude Code
+in the composer. Credentials remain owned by each CLI; Tidy does not access their
+sign-in stores or copy their credentials. The current integration uses Codex App Server over stdio and Claude Code
 bidirectional streaming JSON; tests exercise both protocols with fixture executables, without paid inference.
+
+### Harness updates
+
+The desktop app checks installed Codex, Claude Code and OpenCode CLIs at startup,
+every 30 minutes, and when the app regains focus after that interval. Checks run in
+the background and do not delay the workspace. A bottom-right notification shows
+the installed and available versions in one compact card, with Codex, Claude Code
+and OpenCode marks and an **Update** action for each recognized installation.
+Queued rows explain whether they are waiting for active responses or another
+installer. Only a running update shows a spinner; completed rows retain their
+provider mark and show a checkmark. Dismissing availability hides that version until a newer release
+is found. Offline checks stay quiet and preserve known updates.
+
+Updates start immediately when possible. Claude's native updater can install in
+the background during an active response; its versioned installer leaves the
+running process intact and the next launch uses the updated version. Other update
+methods wait only for active/preparing responses on that same harness. Idle
+conversations stay open and other harnesses can continue working. New turns for
+the updating CLI are blocked briefly during installation.
+Package-manager installs run sequentially. Tidy verifies the installed version
+before reporting success and offers Retry after a failure. Quitting cancels queued
+updates and waits for an active installer to finish. Runs outside Tidy are managed
+by their own CLI, not tracked by this queue.
+
+Supported update methods are the standard native Codex, Claude Code and OpenCode
+installations, matching global npm/pnpm/Bun installations, and Homebrew casks or
+formulae. Tidy preserves Homebrew's installed cask/channel, uses Claude's user
+`autoUpdatesChannel` setting for discovery, and keeps OpenCode 1 and 2 on their
+respective release lines. Native updaters still enforce their own policies.
+Custom, project-local, unrecognized or shell-wrapper installations receive an
+availability notice with instructions to use their existing package manager;
+Tidy never replaces them with a second global copy or requests administrator
+privileges. Prerelease versions are left to their existing updater.
+
+OpenCode update discovery does not add OpenCode conversation support. Browser
+development exposes no harness-installation API. Update commands follow the
+[Codex CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli),
+[Claude Code setup guide](https://code.claude.com/docs/en/setup#update-claude-code),
+and [OpenCode CLI reference](https://opencode.ai/docs/cli/#upgrade).
 
 Tool activity appears inline with the conversation in collapsed groups. Expand a
 group and a step to inspect commands, searches, reads, file changes, tool inputs

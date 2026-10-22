@@ -36,6 +36,7 @@ const record = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
 const text = (value: unknown) => (typeof value === "string" ? value : "");
 
+/** Build the CLI environment from an allowlist and include standard user installation paths. */
 export function harnessEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {};
   for (const key of [
@@ -69,6 +70,7 @@ export function harnessEnvironment(): NodeJS.ProcessEnv {
       ...(process.env.PATH ?? "").split(delimiter),
       join(homedir(), ".local/bin"),
       join(homedir(), ".bun/bin"),
+      join(homedir(), ".opencode/bin"),
       "/opt/homebrew/bin",
       "/usr/local/bin",
       "/usr/bin",
@@ -81,7 +83,9 @@ export function harnessEnvironment(): NodeJS.ProcessEnv {
   return environment;
 }
 
-export async function findHarness(id: HarnessId, environment = harnessEnvironment()) {
+/** Resolve a simple executable name from absolute PATH entries to its canonical file. */
+export async function findExecutable(id: string, environment = harnessEnvironment()) {
+  if (!/^[a-z][a-z0-9-]*$/.test(id)) return null;
   const extensions = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
   for (const directory of (environment.PATH ?? "").split(delimiter).filter(Boolean)) {
     if (!isAbsolute(directory)) continue;
@@ -99,6 +103,12 @@ export async function findHarness(id: HarnessId, environment = harnessEnvironmen
   return null;
 }
 
+/** Locate a supported conversation CLI or the update-only OpenCode integration. */
+export function findHarness(id: HarnessId | "opencode", environment = harnessEnvironment()) {
+  return findExecutable(id, environment);
+}
+
+/** Report installation and authentication status for the supported conversation providers. */
 export async function checkHarnesses(): Promise<HarnessConnection[]> {
   return Promise.all(
     (["codex", "claude"] as const).map(async (id) => {
