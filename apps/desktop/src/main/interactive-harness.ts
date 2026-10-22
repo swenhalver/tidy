@@ -21,6 +21,7 @@ import {
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 const text = (value: unknown) => (typeof value === "string" ? value : "");
+class HarnessRequestError extends Error {}
 const key = (id: unknown) => `${typeof id}:${String(id)}`;
 const approvalText = (value: string) =>
   plainToolText(value).replace(
@@ -40,6 +41,7 @@ export function startInteractiveHarness(input: {
   onUpdate: (update: HarnessUpdate) => void;
 }): RunningHarness {
   const codex = input.harness === "codex";
+  let deliveryState: NonNullable<RunningHarness["deliveryState"]> = "not-submitted";
   const mode = validatePermissionMode(input.harness, input.settings?.permissionMode);
   const args = codex
     ? ["app-server", "--listen", "stdio://"]
@@ -92,6 +94,8 @@ export function startInteractiveHarness(input: {
   >();
   const emit: typeof input.onUpdate = (update) => {
     if (!stopped && !closed) {
+      if (update.type === "message" || update.type === "tool" || update.type === "approval")
+        deliveryState = "accepted";
       if (update.type === "error") failure = update.text;
       input.onUpdate(update);
     }
@@ -100,8 +104,12 @@ export function startInteractiveHarness(input: {
     codexEvent = createCodexEvents(emit);
   function write(value: unknown) {
     if (closed || child.stdin.destroyed || !child.stdin.writable) return false;
-    child.stdin.write(JSON.stringify(value) + "\n");
-    return true;
+    try {
+      child.stdin.write(JSON.stringify(value) + "\n");
+      return true;
+    } catch {
+      return false;
+    }
   }
   function signal(value: NodeJS.Signals) {
     try {
@@ -154,6 +162,8 @@ export function startInteractiveHarness(input: {
       ) {
         clearTimeout(timer);
         waiting.delete(String(id));
+        if (codex && method === "turn/start" && deliveryState === "unknown")
+          deliveryState = "not-submitted";
         reject(new Error("The harness connection closed."));
       }
     });
@@ -242,7 +252,7 @@ export function startInteractiveHarness(input: {
         clearTimeout(pending.timer);
         if (value.error)
           pending.reject(
-            new Error(
+            new HarnessRequestError(
               plainToolText(text(object(value.error).message)).slice(0, 1000) ||
                 "The installed Codex rejected this request.",
             ),
@@ -335,7 +345,10 @@ export function startInteractiveHarness(input: {
         return;
       }
       if (method === "serverRequest/resolved") cancelApproval(params.requestId);
-      if (method === "turn/started") turnId = text(object(params.turn).id) || turnId;
+      if (method === "turn/started") {
+        deliveryState = "accepted";
+        turnId = text(object(params.turn).id) || turnId;
+      }
       const item = object(params.item);
       if (method === "item/started" && item.type === "fileChange" && filePreviews.size < 1000)
         filePreviews.set(
@@ -465,7 +478,7 @@ export function startInteractiveHarness(input: {
       else resolve();
     });
   });
-  void (async () => {
+  const ready = (async () => {
     if (codex) {
       await request("initialize", {
         clientInfo: { name: "tidy_desktop", title: "Tidy", version },
@@ -491,6 +504,7 @@ export function startInteractiveHarness(input: {
       if (stopped || closed) return;
       emit({ type: "session", id: threadId });
       if (typeof response.model === "string") emit({ type: "model", model: response.model });
+      deliveryState = "unknown";
       const responseTurn = object(
         await request("turn/start", {
           threadId,
@@ -499,27 +513,38 @@ export function startInteractiveHarness(input: {
             ...(input.images ?? []).map((image) => ({ type: "localImage", path: image.path })),
           ],
           ...(input.settings?.effort ? { effort: input.settings.effort } : {}),
+        }).catch((error: unknown) => {
+          if (error instanceof HarnessRequestError && deliveryState !== "accepted")
+            deliveryState = "rejected";
+          throw error;
         }),
       );
+      deliveryState = "accepted";
       turnId = text(object(responseTurn.turn).id) || turnId;
     } else {
       await request("initialize", {});
       if (stopped || closed) return;
-      write({
-        type: "user",
-        session_id: input.sessionId ?? "",
-        parent_tool_use_id: null,
-        message: {
-          role: "user",
-          content: [
-            { type: "text", text: input.prompt },
-            ...(input.images ?? []).map((image) => ({
-              type: "image",
-              source: { type: "base64", media_type: image.mimeType, data: image.data },
-            })),
-          ],
-        },
-      });
+      deliveryState = "unknown";
+      if (
+        !write({
+          type: "user",
+          session_id: input.sessionId ?? "",
+          parent_tool_use_id: null,
+          message: {
+            role: "user",
+            content: [
+              { type: "text", text: input.prompt },
+              ...(input.images ?? []).map((image) => ({
+                type: "image",
+                source: { type: "base64", media_type: image.mimeType, data: image.data },
+              })),
+            ],
+          },
+        })
+      ) {
+        deliveryState = "not-submitted";
+        throw new Error("The harness connection closed.");
+      }
     }
   })().catch((error: unknown) => {
     if (!stopped && !closed && !completed) {
@@ -528,8 +553,25 @@ export function startInteractiveHarness(input: {
     }
   });
   return {
+    get deliveryState() {
+      return deliveryState;
+    },
     done,
     stop,
+    async steer(message) {
+      if (!codex) return false;
+      await ready;
+      if (stopped || closed || completed || !threadId || !turnId) return false;
+      await request("turn/steer", {
+        threadId,
+        expectedTurnId: turnId,
+        input: [
+          { type: "text", text: message.prompt, text_elements: [] },
+          ...message.images.map((image) => ({ type: "localImage", path: image.path })),
+        ],
+      });
+      return true;
+    },
     respondToApproval(id, decision) {
       const approval = approvals.get(id);
       if (stopped || closed || completed || !approval || !approval.choices.includes(decision))
