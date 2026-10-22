@@ -61,7 +61,9 @@ export class AppPreviews {
       });
       view.webContents.on("will-attach-webview", (event) => event.preventDefault());
       // Reloads and renderer failures must not leave native content over a new app screen.
-      window.webContents.on("did-start-navigation", () => view.setVisible(false));
+      window.webContents.on("did-start-navigation", (event) => {
+        if (event.isMainFrame && !event.isSameDocument) view.setVisible(false);
+      });
       window.webContents.on("render-process-gone", () => view.setVisible(false));
       window.on("resize", () => this.fit(window, preview!));
       window.once("closed", () => {

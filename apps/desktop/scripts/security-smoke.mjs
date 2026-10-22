@@ -433,6 +433,12 @@ app.on("browser-window-created", (_event, window) => {
         bounds: { x: 250, y: 80, width: 450, height: 300 },
       });
       assert.equal(await preview.webContents.executeJavaScript("counter.textContent"), "1");
+      const inPageNavigation = new Promise((resolve) => page.once("did-navigate-in-page", resolve));
+      await evaluate("location.hash='preview-navigation-fixture';true");
+      await inPageNavigation;
+      assert.equal(preview.getVisible(), true);
+      await evaluate("history.replaceState(null,'','tidy://app/index.html');true");
+      assert.equal(preview.getVisible(), true);
       const beforePreviewPopup = BrowserWindow.getAllWindows().length;
       await preview.webContents.executeJavaScript("window.open('https://attacker.invalid/');true");
       assert.equal(BrowserWindow.getAllWindows().length, beforePreviewPopup);
@@ -447,6 +453,16 @@ app.on("browser-window-created", (_event, window) => {
       await evaluate("location.href='https://attacker.invalid/';true");
       await new Promise((resolve) => setTimeout(resolve, 100));
       assert.equal(page.getURL(), "tidy://app/index.html");
+      await api("setAppPreview", {
+        visible: true,
+        url: previewURL,
+        bounds: { x: 250, y: 80, width: 450, height: 300 },
+      });
+      assert.equal(preview.getVisible(), true);
+      const reloading = new Promise((resolve) => page.once("did-start-navigation", resolve));
+      page.reload();
+      await reloading;
+      assert.equal(preview.getVisible(), false);
       foreign.destroy();
       console.info(
         "PASS: sandbox, protocol resources, connected canvas/thread round trip, isolated interactive local app previews, native SVG export injection rejection, IPC authorization and validation, event confidentiality, model controls, Enter to send, native approvals, replay rejection, private runtime state, navigation and popup denial.",
