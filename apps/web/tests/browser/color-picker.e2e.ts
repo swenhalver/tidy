@@ -95,34 +95,32 @@ test("eyedropper samples the canvas from a selection colour picker", async ({ pa
     .getByRole("button", { name: "Open selection colour #1e1e1e palette", exact: true })
     .click();
   await page.getByRole("button", { name: "Pick from canvas", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Colour picker", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "Colour picker", exact: true })).toBeVisible();
   const canvas = page.getByLabel("Design canvas", { exact: true });
   const heading = page.locator('[data-node-id="desktop-heading"]');
-  await expect(canvas).toHaveCSS("cursor", "none");
-  await expect(heading).toHaveCSS("cursor", "none");
+  await expect(canvas).toHaveCSS("cursor", "crosshair");
+  await expect(heading).toHaveCSS("cursor", "crosshair");
   const marker = page.locator("[data-canvas-color-picker-cursor]");
   const headingBox = required(await heading.boundingBox());
   const pointer = { x: headingBox.x + 10, y: headingBox.y + 5 };
   await page.mouse.move(pointer.x, pointer.y);
   await expect(marker).toBeVisible();
-  await expect(marker).toHaveCSS("background-image", /eyedropper-cursor/);
-  const markerBox = required(await marker.boundingBox());
-  expect(markerBox.x).toBeCloseTo(pointer.x - 3, 0);
-  expect(markerBox.y).toBeCloseTo(pointer.y - 21, 0);
-  await canvas.click({ position: { x: 5, y: 150 } });
-  await expect(canvas).toHaveCSS("cursor", "none");
+  await expect(marker).toHaveAttribute("data-ready", "true");
+  await expect(marker.locator("canvas")).toBeVisible();
   const source = required(await page.locator('[data-node-id="desktop-screen"]').boundingBox());
   await page.mouse.click(source.x + 10, source.y + 10);
   await expect(heading).toHaveCSS("color", "rgb(242, 242, 240)");
-  await expect(canvas).not.toHaveCSS("cursor", "none");
+  await expect(canvas).not.toHaveCSS("cursor", "crosshair");
   await expect(marker).toHaveCount(0);
-  await page
-    .getByRole("button", { name: "Open selection colour #f2f2f0 palette", exact: true })
-    .click();
+  const picker = page.getByRole("dialog", { name: "Colour picker", exact: true });
+  await expect(picker).toBeVisible();
+  await expect(picker.getByRole("spinbutton", { name: "R", exact: true })).toHaveValue("242");
+  await expect(picker.getByRole("spinbutton", { name: "G", exact: true })).toHaveValue("242");
+  await expect(picker.getByRole("spinbutton", { name: "B", exact: true })).toHaveValue("240");
   await page.getByRole("button", { name: "Pick from canvas", exact: true }).click();
-  await expect(canvas).toHaveCSS("cursor", "none");
+  await expect(canvas).toHaveCSS("cursor", "crosshair");
   await page.keyboard.press("Escape");
-  await expect(canvas).not.toHaveCSS("cursor", "none");
+  await expect(canvas).not.toHaveCSS("cursor", "crosshair");
   await expect(marker).toHaveCount(0);
 });
 
@@ -224,6 +222,10 @@ for (const sample of [
     await page.mouse.move(point.x, point.y);
     await expect(page.locator("[data-canvas-color-picker-cursor]")).toBeVisible();
 
+    await expect(page.locator("[data-canvas-color-picker-cursor]")).toHaveAttribute(
+      "data-ready",
+      "true",
+    );
     await page.mouse.click(point.x, point.y);
     await expect(page.locator('[data-node-id="desktop-email-placeholder"]')).toHaveCSS(
       "color",
@@ -492,4 +494,69 @@ test("a page colour drag previews locally and commits exactly one undo step on r
   await expect(canvas).toHaveCSS("background-color", original);
   await page.keyboard.press("ControlOrMeta+Shift+z");
   await expect(canvas).toHaveCSS("background-color", changed);
+});
+
+test("sampling rendered gradient colours updates the selected text and open picker", async ({
+  page,
+}) => {
+  await page.goto("/dev/import-preview?edit=1");
+  await page.getByRole("button", { name: "Select Welcome heading", exact: true }).first().click();
+  const source = page.locator('[data-node-id="desktop-submit"]');
+  await source.evaluate((element) => {
+    if (!(element instanceof HTMLElement)) throw new Error("Missing source");
+    element.style.backgroundImage = "linear-gradient(to right, #224466 50%, #eebb88 50%)";
+  });
+  await page.getByRole("button", { name: "Open text color palette", exact: true }).click();
+  const picker = page.getByRole("dialog", { name: "Colour picker", exact: true });
+  await picker.getByRole("button", { name: "Pick from canvas", exact: true }).click();
+  const marker = page.locator("[data-canvas-color-picker-cursor]");
+  await expect(marker).toHaveAttribute("data-ready", "true");
+  const bounds = required(await source.boundingBox());
+  const point = { x: bounds.x + bounds.width / 4, y: bounds.y + bounds.height / 2 };
+  await page.mouse.move(point.x, point.y);
+  await expect(marker).toHaveText("#224466");
+  await page.mouse.click(point.x, point.y);
+  await expect(picker).toBeVisible();
+  await expect(picker.getByRole("textbox", { name: "Hex colour", exact: true })).toHaveValue(
+    "#224466",
+  );
+  await expect(page.locator('[data-node-id="desktop-heading"]')).toHaveCSS(
+    "color",
+    "rgb(34, 68, 102)",
+  );
+});
+
+test("sampling can be cancelled, toggled off, replaced by a field edit, or closed without leaking a selection", async ({
+  page,
+}) => {
+  await page.goto("/dev/import-preview?edit=1");
+  await page.getByRole("button", { name: "Select Welcome heading", exact: true }).first().click();
+  const anchor = page.getByRole("button", { name: "Open text color palette", exact: true });
+  await anchor.click();
+  const picker = page.getByRole("dialog", { name: "Colour picker", exact: true });
+  const toggle = picker.getByRole("button", { name: "Pick from canvas", exact: true });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(picker).toBeVisible();
+  await expect(anchor).toBeFocused();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await toggle.click();
+  await toggle.click();
+  await expect(page.locator("[data-picking-canvas-color]")).toHaveCount(0);
+  await toggle.click();
+  const red = picker.getByRole("spinbutton", { name: "R", exact: true });
+  await red.click();
+  await expect(red).toBeFocused();
+  await red.fill("80");
+  await red.press("Enter");
+  await expect(page.locator("[data-picking-canvas-color]")).toHaveCount(0);
+  await expect(page.locator('[data-node-id="desktop-heading"]')).toHaveCSS(
+    "color",
+    "rgb(80, 30, 30)",
+  );
+  await toggle.click();
+  await picker.getByRole("button", { name: "Close colour picker", exact: true }).click();
+  await expect(picker).toHaveCount(0);
+  await expect(page.locator("[data-picking-canvas-color]")).toHaveCount(0);
 });
