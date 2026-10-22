@@ -1,3 +1,4 @@
+import { HarnessSkills } from "./harness-skills";
 import { summarizeThread } from "../shared/thread-updates";
 import {
   approvalDecisionSchema,
@@ -74,6 +75,7 @@ export class WorkspaceService {
     private launch = startHarness,
     private locate = findHarness,
     private configure = validateHarnessSettings,
+    readonly skills = new HarnessSkills(locate),
   ) {}
 
   private serialize<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
@@ -249,7 +251,13 @@ export class WorkspaceService {
     try {
       if (input.threadId && (await this.store.threadExists(input.projectId, input.threadId)))
         throw new Error("This thread already exists.");
-      return await this.run(thread, input.prompt, input.attachmentIds, input.messageId);
+      return await this.run(
+        thread,
+        input.prompt,
+        input.attachmentIds,
+        input.messageId,
+        input.skillId,
+      );
     } finally {
       this.starting.delete(thread.id);
       this.cancelledStarts.delete(thread.id);
@@ -268,7 +276,7 @@ export class WorkspaceService {
         this.automaticQueues.delete(thread.id);
         if ((this.stopVersions.get(thread.id) ?? 0) !== stopVersion)
           this.cancelledStarts.add(thread.id);
-        return this.run(thread, input.text, input.attachmentIds, input.messageId);
+        return this.run(thread, input.text, input.attachmentIds, input.messageId, input.skillId);
       }
       if (thread.doneAt) throw new Error("Reopen this thread before continuing.");
       const queue = thread.queuedMessages ?? [];
@@ -292,6 +300,7 @@ export class WorkspaceService {
         id,
         text: input.text,
         attachments,
+        skillId: input.skillId,
       });
       await this.persistQueue(thread, [...queue, message]);
       if ((this.stopVersions.get(thread.id) ?? 0) !== stopVersion) return structuredClone(thread);
@@ -378,14 +387,23 @@ export class WorkspaceService {
           if (this.closing || (this.stopVersions.get(thread.id) ?? 0) !== stopVersion)
             return structuredClone(thread);
           this.automaticQueues.add(thread.id);
-          return await this.run(thread, message.text, attachmentIds, message.id);
+          return await this.run(thread, message.text, attachmentIds, message.id, message.skillId);
         }
-        const prepared = await this.prepareMessage(thread, message.text, attachmentIds);
+        const prepared = await this.prepareMessage(
+          thread,
+          message.text,
+          attachmentIds,
+          message.skillId,
+        );
         if (this.closing || job.stopped) return structuredClone(thread);
         const insertion = thread.messages.length;
         if (
           job.process?.steer &&
-          (await job.process.steer({ prompt: prepared.context, images: prepared.images }))
+          (await job.process.steer({
+            prompt: prepared.prompt,
+            skill: prepared.skill,
+            images: prepared.images,
+          }))
         ) {
           thread.messages.splice(insertion, 0, { ...message, role: "user" });
           if (!job.stopped && !this.closing) this.automaticQueues.add(thread.id);
@@ -411,7 +429,7 @@ export class WorkspaceService {
           return structuredClone(thread);
       }
       this.automaticQueues.add(thread.id);
-      return await this.run(thread, message.text, attachmentIds, message.id);
+      return await this.run(thread, message.text, attachmentIds, message.id, message.skillId);
     } catch (error) {
       this.automaticQueues.delete(thread.id);
       thread.queueError = (
@@ -440,7 +458,12 @@ export class WorkspaceService {
     return attachments;
   }
 
-  private async prepareMessage(thread: Thread, prompt: string, attachmentIds: string[] = []) {
+  private async prepareMessage(
+    thread: Thread,
+    prompt: string,
+    attachmentIds: string[] = [],
+    skillId?: string,
+  ) {
     if (this.closing) throw new Error("Tidy is closing.");
     if (thread.doneAt) throw new Error("Reopen this thread before continuing.");
     const project = this.store.project(thread.projectId);
@@ -472,6 +495,14 @@ export class WorkspaceService {
       throw new Error(
         `Install ${thread.harness === "codex" ? "Codex" : "Claude Code"} and sign in with its CLI first.`,
       );
+    const skill = skillId
+      ? await this.skills.resolve({
+          harness: thread.harness,
+          cwd: project.path,
+          id: skillId,
+          prompt,
+        })
+      : undefined;
     const context = [
       "You are working in a local Tidy project. The working directory is the project root.",
       "Project designs live in .tidy/designs/*.json. Each file contains { id, name, folderId, document }; folderId is a local design-folder ID or null. Preserve id, name and folderId when editing document content. Folder metadata lives in .tidy/folders/<id>.json and design paths remain stable when files move between folders. document uses Tidy's shared DesignDocument schema (schemaVersion 1). Preserve this format when editing designs.",
@@ -487,10 +518,16 @@ export class WorkspaceService {
             ...attachments.map((file) => `${JSON.stringify(file.name)}: ${file.path}`),
           ]
         : []),
-      "User request:",
-      prompt || "Review the attached files.",
     ].join("\n\n");
-    return { executable, context, images, attachments, project };
+    return {
+      executable,
+      context,
+      images,
+      attachments,
+      project,
+      prompt: `${context}\n\nUser request:\n\n${prompt || "Review the attached files."}`,
+      skill: skill ? { invocation: skill, context, prompt } : undefined,
+    };
   }
 
   /** Reserve preparation before asynchronous work so maintenance cannot race CLI launch. */
@@ -499,6 +536,7 @@ export class WorkspaceService {
     prompt: string,
     attachmentIds: string[] = [],
     messageId?: string,
+    skillId?: string,
   ) {
     if (this.updatingHarnesses.has(thread.harness))
       throw new Error("This harness is updating. Try again when the update finishes.");
@@ -508,7 +546,7 @@ export class WorkspaceService {
     this.starting.set(thread.id, thread.projectId);
     this.preparingHarnesses.set(thread.id, thread.harness);
     try {
-      return await this.runPrepared(thread, prompt, attachmentIds, messageId);
+      return await this.runPrepared(thread, prompt, attachmentIds, messageId, skillId);
     } finally {
       this.preparingHarnesses.delete(thread.id);
       this.starting.delete(thread.id);
@@ -522,12 +560,16 @@ export class WorkspaceService {
     prompt: string,
     attachmentIds: string[],
     messageId?: string,
+    skillId?: string,
   ) {
-    const { executable, context, images, attachments, project } = await this.prepareMessage(
-      thread,
-      prompt,
-      attachmentIds,
-    );
+    const {
+      executable,
+      prompt: preparedPrompt,
+      skill,
+      images,
+      attachments,
+      project,
+    } = await this.prepareMessage(thread, prompt, attachmentIds, skillId);
     const queuedMessages = thread.queuedMessages;
     const queuedIndex = queuedMessages?.findIndex((item) => item.id === messageId) ?? -1;
     thread = {
@@ -588,7 +630,8 @@ export class WorkspaceService {
         harness: thread.harness,
         executable,
         cwd: project.path,
-        prompt: context,
+        prompt: preparedPrompt,
+        skill,
         sessionId: thread.sessionId,
         settings: thread.settings,
         images,
