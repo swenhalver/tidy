@@ -20,6 +20,27 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+test("snapshot reads stay stable without evicting warm designs when disabled previews exceed the cache size", () => {
+  const repository = new DesignRepository({
+    async readDesign() {
+      throw new Error("Snapshot reads must not load designs");
+    },
+    async updateDesign() {
+      throw new Error("Unused");
+    },
+  });
+  repository.put("project", file("warm"));
+  const warm = repository.get("project", "design");
+  const empty = repository.get("project", "missing");
+  for (let index = 0; index < 100; index++) {
+    const id = `disabled-preview-${index}`;
+    expect(repository.get("project", id)).toBe(empty);
+    expect(repository.get("project", id)).toBe(repository.get("project", id));
+  }
+  expect(repository.get("project", "missing")).toBe(empty);
+  expect(repository.get("project", "design")).toBe(warm);
+});
+
 test("design surfaces deduplicate reads and invalidate only the changed project/file, even with the same mtime", async () => {
   let reads = 0;
   const repository = new DesignRepository({

@@ -1,6 +1,7 @@
 import type { DesktopAPI, DesignSummary, LocalDesign } from "../../shared/contracts";
 
 type Snapshot = { value?: LocalDesign; error?: string };
+const EMPTY: Snapshot = Object.freeze({});
 type Entry = {
   snapshot: Snapshot;
   listeners: Set<() => void>;
@@ -42,7 +43,7 @@ export class DesignRepository {
   }
 
   get(projectId: string, id: string) {
-    return this.entry(projectId, id).snapshot;
+    return this.entries.get(`${projectId}:${id}`)?.snapshot ?? EMPTY;
   }
 
   subscribe(projectId: string, id: string, listener: () => void) {

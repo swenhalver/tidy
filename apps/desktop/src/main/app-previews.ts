@@ -50,11 +50,11 @@ export class AppPreviews {
           return false;
         }
       };
-      view.webContents.on("will-navigate", (event, target) => {
-        if (!allow(target)) event.preventDefault();
+      view.webContents.on("will-navigate", (event) => {
+        if (!allow(event.url)) event.preventDefault();
       });
-      view.webContents.on("will-redirect", (event, target) => {
-        if (!allow(target)) event.preventDefault();
+      view.webContents.on("will-redirect", (event) => {
+        if (!allow(event.url)) event.preventDefault();
       });
       view.webContents.on("will-frame-navigate", (event) => {
         if (!allow(event.url)) event.preventDefault();

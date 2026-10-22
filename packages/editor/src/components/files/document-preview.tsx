@@ -107,7 +107,7 @@ export function DocumentPreview({
     for (const id of nodeIds ?? []) {
       let node = byId.get(id);
       while (node?.parentId) node = byId.get(node.parentId);
-      if (node) targets.add(node.id);
+      if (node?.visible) targets.add(node.id);
     }
     const roots = nodes.filter(
       (node) => node.parentId === null && node.visible && (!targets.size || targets.has(node.id)),

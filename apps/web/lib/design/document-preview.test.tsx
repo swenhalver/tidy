@@ -35,4 +35,11 @@ test("a thread preview shows its selected page and containing frame, with a usab
   expect(selected).not.toContain('data-thumbnail-node="other-frame"');
   expect(render("second", ["removed"])).toContain('data-thumbnail-node="other-frame"');
   expect(render("removed-page", [])).toContain('data-thumbnail-node="first-frame"');
+  document.nodes[1].visible = false;
+  for (const selection of [["selected-frame"], ["child"]]) {
+    const fallback = render("second", selection);
+    expect(fallback).toContain('data-thumbnail-node="other-frame"');
+    expect(fallback).not.toContain('data-thumbnail-node="selected-frame"');
+    expect(fallback).not.toContain('data-thumbnail-node="first-frame"');
+  }
 });
