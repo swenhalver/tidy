@@ -13,8 +13,11 @@ export const test = base.extend({
         },
       }),
     );
+    await page.route("**/api/privacy/mcp-analytics", (route) =>
+      route.fulfill({ json: { enabled: false, signedIn: false } }),
+    );
     await page.addLocatorHandler(
-      page.getByRole("button", { name: "Use essential storage", exact: true }),
+      page.getByRole("button", { name: "Reject all optional", exact: true }),
       async (button) => {
         await button.click();
       },
