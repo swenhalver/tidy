@@ -61,19 +61,6 @@ function Avatar({ name, image, size = 32 }: { name: string; image: string | null
   );
 }
 
-function SendingStatus() {
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setVisible(true), 1000);
-    return () => window.clearTimeout(timer);
-  }, []);
-  return (
-    <p role="status" className="ml-9 mt-1 h-4 text-xs text-secondary-ink">
-      <span className={visible ? undefined : "sr-only"}>Sending…</span>
-    </p>
-  );
-}
-
 type ReactionDraft = {
   emoji: (typeof COMMENT_EMOJIS)[number];
   reacted: boolean;
@@ -375,6 +362,9 @@ export const CanvasComments = forwardRef<
     (submission) => submission.thread.id === activeId && submission.kind === "sending",
   );
   const [changing, setChanging] = useState(false);
+  const [resolvedNotice, setResolvedNotice] = useState<CommentThread | null>(null);
+  const [noticePaused, setNoticePaused] = useState(false);
+  const noticeElement = useRef<HTMLDivElement>(null);
   const [canModerateThreads, setCanModerateThreads] = useState(false);
   const [listOpen, setListOpen] = useState(false);
   const [filter, setFilter] = useState<"open" | "resolved">("open");
@@ -386,16 +376,32 @@ export const CanvasComments = forwardRef<
   const scrollRequest = useRef<string | null>(null);
   const readController = useRef<AbortController | null>(null);
   const interactionRef = useRef(0);
-  const mutationRef = useRef<{ thread: CommentThread; resolved: boolean | null } | null>(null);
+  const mutationRef = useRef<{
+    thread: CommentThread;
+    resolved: boolean | null;
+    undoRequested: boolean;
+  } | null>(null);
   const editor = useRef<HTMLTextAreaElement>(null);
   const refreshVersion = useRef(0);
   const [confirmedRead, setConfirmedRead] = useState(() => ({
     version: 0,
     messageIds: new Set<string>(),
   }));
+  const undoBlocked = Boolean(
+    resolvedNotice &&
+    ((changing && mutationRef.current?.thread.id !== resolvedNotice.id) ||
+      !canChangeThread(resolvedNotice)),
+  );
+  useEffect(() => {
+    if (!resolvedNotice || noticePaused || undoBlocked) return;
+    const timer = window.setTimeout(() => setResolvedNotice(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [resolvedNotice, noticePaused, undoBlocked]);
+  useEffect(() => setResolvedNotice(null), [fileId, pageId]);
   const latestReadVersion = useCallback(() => refreshVersion.current, []);
   const loadedPages = useRef(1);
   const focusedThread = useRef<string | null>(null);
+  const reopenedThread = useRef<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   useEffect(() => {
@@ -403,6 +409,7 @@ export const CanvasComments = forwardRef<
   }, [activeId]);
   useEffect(() => {
     loadedPages.current = 1;
+    reopenedThread.current = null;
   }, [fileId, pageId]);
 
   const refresh = useCallback(
@@ -427,6 +434,7 @@ export const CanvasComments = forwardRef<
             message: "Could not load comments.",
           });
         };
+        const reopened = reopenedThread.current;
         const selected = ensureThreadId ?? focusedThread.current;
         // The list and focused thread are independent reads; do not make posting wait for both in sequence.
         const [firstPage, detail] = await Promise.all([
@@ -443,6 +451,10 @@ export const CanvasComments = forwardRef<
           if (!cursor) break;
         }
         if (detail) pages.push(detail.threads);
+        if (reopened && !pages.some((page) => page.some((thread) => thread.id === reopened))) {
+          const restored = await read(new URLSearchParams({ pageId, threadId: reopened }));
+          pages.push(restored.threads);
+        }
         if (!result || version !== refreshVersion.current) return;
         const mutation = mutationRef.current;
         const merged = mergeCommentPages(pages);
@@ -490,6 +502,8 @@ export const CanvasComments = forwardRef<
         setCanModerateThreads(result.canModerateThreads);
       } catch (cause) {
         if (version === refreshVersion.current) notifyLoadError(cause, "Could not load comments.");
+      } finally {
+        if (readController.current === controller) readController.current = null;
       }
     },
     [fileId, pageId, setSubmissions, setLoadError],
@@ -721,19 +735,32 @@ export const CanvasComments = forwardRef<
     setError("");
   }
 
-  async function changeThread(thread: CommentThread, resolved: boolean | null) {
-    const notifyError = setError("");
-    if (
-      mutationRef.current ||
-      submissionsRef.current.some(
+  function canChangeThread(thread: CommentThread) {
+    return (
+      !readOnly &&
+      (canModerateThreads || viewerId === thread.createdBy) &&
+      !submissionsRef.current.some(
         (submission) => submission.thread.id === thread.id && submission.kind === "sending",
-      ) ||
-      readOnly ||
-      !(canModerateThreads || viewerId === thread.createdBy)
-    )
-      return;
-    const interaction = ++interactionRef.current;
-    mutationRef.current = { thread, resolved };
+      )
+    );
+  }
+
+  async function changeThread(
+    thread: CommentThread,
+    resolved: boolean | null,
+    preserveInteraction = false,
+  ) {
+    const notifyError = setError("");
+    if (mutationRef.current || !canChangeThread(thread)) return;
+    const interaction = preserveInteraction ? interactionRef.current : ++interactionRef.current;
+    const mutation = { thread, resolved, undoRequested: false };
+    mutationRef.current = mutation;
+    let rollbackThread = thread;
+    let needsRefresh = resolved === null;
+    setNoticePaused(Boolean(noticeElement.current?.matches(":hover, :focus-within")));
+    setResolvedNotice((current) =>
+      resolved === true ? thread : current?.id === thread.id ? null : current,
+    );
     setSubmissions((current) =>
       current.flatMap((item) =>
         item.thread.id !== thread.id
@@ -750,9 +777,11 @@ export const CanvasComments = forwardRef<
         item.id !== thread.id ? [item] : resolved === null ? [] : [{ ...item, resolved }],
       ),
     );
-    setActiveId(null);
-    setOptionsOpen(false);
-    setBody("");
+    if (!preserveInteraction) {
+      setActiveId(null);
+      setOptionsOpen(false);
+      setBody("");
+    }
     setChanging(true);
 
     try {
@@ -761,18 +790,48 @@ export const CanvasComments = forwardRef<
           ? await removeCommentThread({ fileId, threadId: thread.id })
           : await changeCommentThreadStatus({ fileId, threadId: thread.id, resolved });
       if (result.kind === "error") throw new Error(result.error);
-    } catch (cause) {
-      setThreads((current) => [...current.filter((item) => item.id !== thread.id), thread]);
-      if (interaction === interactionRef.current) {
-        setActiveId(thread.id);
-        notifyError(cause, "Could not update thread. Try again.");
+      if (mutation.undoRequested) {
+        rollbackThread = { ...thread, resolved: true };
+        const undo = await changeCommentThreadStatus({
+          fileId,
+          threadId: thread.id,
+          resolved: false,
+        });
+        if (undo.kind === "error") throw new Error(undo.error);
       }
+    } catch (cause) {
+      needsRefresh = true;
+      setResolvedNotice((current) => (current?.id === thread.id ? null : current));
+      setThreads((current) => [...current.filter((item) => item.id !== thread.id), rollbackThread]);
+      if (interaction === interactionRef.current && !preserveInteraction) {
+        setActiveId(thread.id);
+      }
+      notifyError(cause, "Could not update thread. Try again.");
     } finally {
       mutationRef.current = null;
       setChanging(false);
-      // Reads never change the selected thread or clear a newer draft.
-      void refresh();
+      if (needsRefresh || readController.current) void refresh();
     }
+  }
+
+  function undoResolve(thread: CommentThread) {
+    const mutation = mutationRef.current;
+    if ((mutation && mutation.thread.id !== thread.id) || !canChangeThread(thread)) return;
+    setResolvedNotice(null);
+    reopenedThread.current = thread.id;
+    if (mutation?.resolved === true) {
+      mutation.undoRequested = true;
+      mutation.resolved = false;
+      refreshVersion.current++;
+      setThreads((current) =>
+        current.some((item) => item.id === thread.id)
+          ? current.map((item) => (item.id === thread.id ? { ...item, resolved: false } : item))
+          : [...current, { ...thread, resolved: false }],
+      );
+      return;
+    }
+    const latestThread = pageThreads.find((item) => item.id === thread.id) ?? thread;
+    void changeThread({ ...latestThread, resolved: true }, false, true);
   }
 
   return (
@@ -960,7 +1019,7 @@ export const CanvasComments = forwardRef<
                     type="button"
                     disabled={changing || posting}
                     onClick={() => void changeThread(active, !active.resolved)}
-                    className="text-xs hover:underline disabled:opacity-50"
+                    className="rounded px-2 py-1.5 text-xs hover:bg-primary-grey/20 focus-visible:outline-2 focus-visible:outline-primary-orange active:scale-[0.97] disabled:opacity-50"
                   >
                     {active?.resolved ? "Reopen" : "Resolve"}
                   </button>
@@ -1033,7 +1092,6 @@ export const CanvasComments = forwardRef<
                       }
                       latestReadVersion={latestReadVersion}
                     />
-                    {submission?.kind === "sending" && <SendingStatus />}
                     {submission?.kind === "failed" && (
                       <div className="ml-9 mt-1 flex items-center gap-2 text-xs text-danger">
                         <p role="alert">{submission.error}</p>
@@ -1105,6 +1163,34 @@ export const CanvasComments = forwardRef<
           )}
         </section>
       )}
+      {resolvedNotice &&
+        notificationRoot &&
+        createPortal(
+          <div
+            ref={noticeElement}
+            onPointerEnter={() => setNoticePaused(true)}
+            onPointerLeave={(event) =>
+              setNoticePaused(event.currentTarget.contains(document.activeElement))
+            }
+            onFocus={() => setNoticePaused(true)}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget))
+                setNoticePaused(event.currentTarget.matches(":hover"));
+            }}
+          >
+            <EditorNotification
+              message="Comment resolved"
+              tone="success"
+              onDismiss={() => setResolvedNotice(null)}
+              action={{
+                label: "Undo",
+                onClick: () => undoResolve(resolvedNotice),
+                disabled: undoBlocked,
+              }}
+            />
+          </div>,
+          notificationRoot,
+        )}
       {(error || loadError) &&
         !point &&
         notificationRoot &&
