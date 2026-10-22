@@ -17,6 +17,12 @@ changes without remounting the canvas. `active` suspends global keyboard and
 clipboard handlers while another desktop workspace is focused. Hosted comments,
 reviews and room connections remain optional capabilities of the web host.
 
+Hosts can supply a `threadControl` and receive `onThreadContextChange` with the current
+page, selected node IDs and a `whenSettled` fence for submitted edits. This lets desktop
+reuse its local conversation without invoking hosted agent APIs. `compact` enables
+the editor's compact interaction model when its workspace pane is narrower than the
+application window; desktop supplies the corresponding panel layout styles.
+
 Consumers import `theme.css` and `chrome.css` after Tailwind and add this package's
 `src` directory as a Tailwind source. Instrument fonts and Tidy branding live in
 `@tidy/ui`; document schemas and rendering remain in `@tidy/design` and

@@ -1,11 +1,23 @@
 import { errorMessage } from "@tidy/ui/errors";
 import { showToast, dismissToast } from "@tidy/ui/toast";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useLayoutEffect,
+  memo,
+  type ReactNode,
+} from "react";
 import { Button } from "@tidy/ui/button";
 import { SelectMenu } from "@tidy/ui/select-menu";
 import { TidyLogo } from "@tidy/ui/tidy-logo";
 import { Icon } from "@tidy/editor/components/ui/icon";
-import { LocalCanvas } from "./local-canvas";
+import { LocalCanvas, type LocalCanvasHandle } from "./local-canvas";
+import { useDesign, useDesignRepository } from "./design-context";
+import { WorkingPane, type WorkingSurface } from "./working-pane";
+import { workingDesignIds } from "../../shared/working-files";
 import { Conversation } from "./conversation";
 import { ThreadSidebar, type ThreadOrderControls } from "./thread-sidebar";
 import { ApprovalRequests } from "./approval-requests";
@@ -39,11 +51,7 @@ import type {
   ThreadSummary,
 } from "../../shared/contracts";
 
-const modes = [
-  { id: "design", label: "Design" },
-  { id: "code", label: "Code" },
-] as const;
-type Mode = (typeof modes)[number]["id"];
+type WorkspaceView = "files" | "thread" | "design";
 type Draft = {
   text: string;
   harness: HarnessId;
@@ -57,7 +65,19 @@ const errorText = (error: unknown) =>
 
 export function App() {
   const api = window.tidy;
-  const [mode, setMode] = useState<Mode>("design");
+  const repository = useDesignRepository();
+  const [views, setViews] = useState<Record<string, WorkspaceView>>({});
+  const [threadPanels, setThreadPanels] = useState<Record<string, boolean>>({});
+  const [workingSurfaces, setWorkingSurfaces] = useState<Record<string, WorkingSurface>>({});
+  const [previewURLs, setPreviewURLs] = useState<Record<string, string>>({});
+  const [canvasReturns, setCanvasReturns] = useState<Record<string, "files" | "thread">>({});
+  const canvas = useRef<LocalCanvasHandle>(null);
+  const [canvasSelection, setCanvasSelection] = useState<{
+    fileId: string;
+    pageId: string;
+    nodeIds: string[];
+  }>();
+  const preparing = useRef(new Map<string, { cancelled: boolean }>());
   const [designNavigation, setDesignNavigation] = useState<HTMLElement | null>(null);
   const [loading, setLoading] = useState(true);
   const [opening, setOpening] = useState(false);
@@ -75,7 +95,6 @@ export function App() {
   const [threads, setThreads] = useState<Record<string, Thread>>({});
   const [selectedThreads, setSelectedThreads] = useState<Record<string, string | null>>({});
   const [selectedDesigns, setSelectedDesigns] = useState<Record<string, string | null>>({});
-  const [designs, setDesigns] = useState<Record<string, LocalDesign>>({});
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [harnessDetails, setHarnessDetails] = useState<
     Record<string, { info?: HarnessDetails; error?: string; loading: boolean }>
@@ -104,21 +123,80 @@ export function App() {
   const project = snapshot?.project;
   const selectedThreadId = project ? selectedThreads[project.id] : null;
   const thread = selectedThreadId ? threads[selectedThreadId] : undefined;
-  const draftKey = `${project?.id ?? ""}:${selectedThreadId ?? "new"}`;
+  const selectedSummary = snapshot?.threads.find((item) => item.id === selectedThreadId);
+  const view = project ? (views[project.id] ?? "files") : "files";
+  const selectedDesignId = project ? selectedDesigns[project.id] : null;
+  const threadVisible =
+    view === "thread" || (view === "design" && Boolean(project && threadPanels[project.id]));
+  const draftKey = `${project?.id ?? ""}:${selectedThreadId ?? (view === "design" && selectedDesignId ? `new:${selectedDesignId}` : "new")}`;
   const readyHarness = harnesses.find((item) => item.status === "ready")?.id ?? "codex";
-  const draft = drafts[draftKey] ?? { ...emptyDraft, harness: readyHarness };
+  const draft = drafts[draftKey] ?? {
+    ...emptyDraft,
+    harness: readyHarness,
+    designIds: !selectedThreadId && view === "design" && selectedDesignId ? [selectedDesignId] : [],
+  };
   const designSnapshot = useMemo(
     () => (snapshot ? { ...snapshot, threads: [] } : undefined),
     [snapshot?.project, snapshot?.designs, snapshot?.folders],
   );
-  const selectedDesignId = project ? selectedDesigns[project.id] : null;
   const backToFiles = useCallback(() => {
-    if (project) setSelectedDesigns((current) => ({ ...current, [project.id]: null }));
+    if (project)
+      setViews((current) => ({ ...current, [project.id]: canvasReturns[project.id] ?? "files" }));
+  }, [project?.id, canvasReturns]);
+  const design = snapshot?.designs.find((item) => item.id === selectedDesignId);
+  const workingIds = useMemo(
+    () =>
+      (thread || selectedSummary) && snapshot
+        ? workingDesignIds(thread ?? selectedSummary!, snapshot.designs)
+        : draft.designIds,
+    [
+      thread?.designIds,
+      thread?.toolActivities,
+      selectedSummary?.designIds,
+      snapshot?.designs,
+      draft.designIds,
+    ],
+  );
+  const workingKey = `${project?.id ?? ""}:${selectedThreadId ?? "new"}`;
+  const workingSurface = workingSurfaces[workingKey];
+  const previewURL = previewURLs[workingKey];
+  const previewAvailable = workingSurface === "preview" || Boolean(previewURL);
+  const changeWorkingSurface = useCallback(
+    (surface: WorkingSurface) => {
+      setWorkingSurfaces((current) => ({ ...current, [workingKey]: surface }));
+    },
+    [workingKey],
+  );
+  const changePreviewURL = useCallback(
+    (url: string) => {
+      setPreviewURLs((current) => ({ ...current, [workingKey]: url }));
+    },
+    [workingKey],
+  );
+  const hasWorkingFiles =
+    previewAvailable ||
+    workingIds.length > 0 ||
+    Boolean(thread?.toolActivities?.some((tool) => tool.kind === "edit" || tool.files?.length));
+  const showSurface = view !== "thread" || hasWorkingFiles;
+  const openDesign = useCallback(
+    (projectId: string, id: string, from: "files" | "thread") => {
+      setSelectedDesigns((current) => ({ ...current, [projectId]: id }));
+      setViews((current) => ({ ...current, [projectId]: "design" }));
+      setCanvasReturns((current) => ({ ...current, [projectId]: from }));
+      setThreadPanels((current) => ({ ...current, [projectId]: from === "thread" }));
+      void repository.load(projectId, id).catch(() => {});
+    },
+    [repository],
+  );
+  const openWorkingDesign = useCallback(
+    (id: string) => {
+      if (project) openDesign(project.id, id, "thread");
+    },
+    [project?.id, openDesign],
+  );
+  const browseFiles = useCallback(() => {
+    if (project) setViews((current) => ({ ...current, [project.id]: "files" }));
   }, [project?.id]);
-  const design =
-    selectedDesignId && snapshot?.designs.some((item) => item.id === selectedDesignId)
-      ? designs[selectedDesignId]
-      : undefined;
   const busy = Boolean(sending[draftKey] && thread?.status !== "running");
 
   const selectedHarness = thread?.harness ?? draft.harness;
@@ -158,6 +236,7 @@ export function App() {
           [key]: {
             ...previous,
             text: [previous.text, message.text].filter(Boolean).join("\n\n"),
+            designIds: [...new Set([...previous.designIds, ...(message.designIds ?? [])])],
             attachments: [...(previous.attachments ?? []), ...(message.attachments ?? [])].filter(
               (file, index, all) => all.findIndex((item) => item.id === file.id) === index,
             ),
@@ -295,10 +374,56 @@ export function App() {
     }));
   }
 
-  const selectThread = useCallback((projectId: string, threadId: string | null) => {
-    threadSelection.current[projectId] = (threadSelection.current[projectId] ?? 0) + 1;
-    setSelectedThreads((current) => ({ ...current, [projectId]: threadId }));
-  }, []);
+  const selectThread = useCallback(
+    (projectId: string, threadId: string | null, keepFile = false) => {
+      threadSelection.current[projectId] = (threadSelection.current[projectId] ?? 0) + 1;
+      setSelectedThreads((current) => ({ ...current, [projectId]: threadId }));
+      if (!keepFile) setViews((current) => ({ ...current, [projectId]: "thread" }));
+      setThreadPanels((current) => ({ ...current, [projectId]: true }));
+    },
+    [],
+  );
+
+  const toggleFileThread = useCallback(() => {
+    if (!project || !selectedDesignId) return;
+    if (threadPanels[project.id]) {
+      setThreadPanels((current) => ({ ...current, [project.id]: false }));
+      return;
+    }
+    const related = snapshot?.threads.find(
+      (item) => !item.doneAt && item.designIds.includes(selectedDesignId),
+    );
+    const current = snapshot?.threads.find((item) => item.id === selectedThreadId);
+    selectThread(
+      project.id,
+      current?.designIds.includes(selectedDesignId) ? current.id : (related?.id ?? null),
+      true,
+    );
+  }, [
+    project?.id,
+    selectedDesignId,
+    selectedThreadId,
+    snapshot?.threads,
+    threadPanels,
+    selectThread,
+  ]);
+
+  const threadToggleAction = useRef(toggleFileThread);
+  threadToggleAction.current = toggleFileThread;
+  const toggleThreadPanel = useCallback(() => threadToggleAction.current(), []);
+  const fileThreadControl = useMemo(
+    () => (
+      <Button
+        className="secondary-button file-thread-toggle"
+        aria-expanded={threadVisible}
+        aria-controls="thread-pane"
+        onClick={toggleThreadPanel}
+      >
+        Threads
+      </Button>
+    ),
+    [threadVisible, toggleThreadPanel],
+  );
 
   function applySnapshot(value: ProjectSnapshot) {
     setSnapshots((current) => {
@@ -411,29 +536,6 @@ export function App() {
     };
   }, [api, project, selectedThreadId, threads]);
 
-  useEffect(() => {
-    if (
-      !api ||
-      !project ||
-      !selectedDesignId ||
-      designs[selectedDesignId] ||
-      !snapshot?.designs.some((item) => item.id === selectedDesignId)
-    )
-      return;
-    let active = true;
-    void api
-      .readDesign(project.id, selectedDesignId)
-      .then((value) => {
-        if (active) setDesigns((current) => ({ ...current, [value.id]: value }));
-      })
-      .catch((value) => {
-        if (active) setError({ projectId: project.id, text: errorText(value), original: value });
-      });
-    return () => {
-      active = false;
-    };
-  }, [api, project, selectedDesignId, designs, snapshot?.designs]);
-
   async function chooseProject(projectId?: string) {
     if (!api || opening) return;
     projectFocus.current =
@@ -453,7 +555,7 @@ export function App() {
 
   const updateLocalDesign = useCallback(
     (value: LocalDesign) => {
-      setDesigns((current) => ({ ...current, [value.id]: value }));
+      repository.put(activeProjectId!, value);
       setSnapshots((current) => {
         const entry = current[activeProjectId!];
         if (!entry) return current;
@@ -464,6 +566,7 @@ export function App() {
           updatedAt: value.updatedAt,
           folderId: value.folderId,
           nodeCount: value.nodeCount,
+          version: value.version,
         };
         return {
           ...current,
@@ -476,7 +579,7 @@ export function App() {
         };
       });
     },
-    [activeProjectId],
+    [activeProjectId, repository],
   );
 
   function attachFiles(files: File[]) {
@@ -557,6 +660,13 @@ export function App() {
       (thread && settingsPending[thread.id])
     )
       return;
+    const canvasHandle = view === "design" ? canvas.current : null;
+    const references = [
+      ...new Set([
+        ...draft.designIds,
+        ...(canvasHandle && selectedDesignId ? [selectedDesignId] : []),
+      ]),
+    ];
     if (thread && (running || queue.messages.length > 0)) {
       if (queue.messages.length >= MAX_QUEUED_MESSAGES) {
         setError({
@@ -566,8 +676,14 @@ export function App() {
         return;
       }
       queue.enqueue(
-        { id: crypto.randomUUID(), text: draft.text, attachments: draft.attachments },
+        {
+          id: crypto.randomUUID(),
+          text: draft.text,
+          attachments: draft.attachments,
+          designIds: references,
+        },
         delivery,
+        canvasHandle ? () => canvasHandle.captureContext() : undefined,
       );
       setDrafts((current) => ({ ...current, [draftKey]: { ...draft, text: "", attachments: [] } }));
       return;
@@ -589,11 +705,12 @@ export function App() {
           submitted.replace(/\s+/g, " ").slice(0, 80) ||
           draft.attachments?.[0]?.name ||
           "New thread",
-        designIds: draft.designIds,
+        designIds: references,
         messages: [],
         revision: 0,
       }),
       revision: (thread?.revision ?? 0) + 1,
+      designIds: [...new Set([...(thread?.designIds ?? []), ...references])],
       messages: [
         ...(thread?.messages ?? []),
         {
@@ -608,6 +725,8 @@ export function App() {
       error: undefined,
       updatedAt: new Date().toISOString(),
     };
+    const preparation = { cancelled: false };
+    preparing.current.set(id, preparation);
     sendingKeys.current.add(key);
     setSending((current) => ({ ...current, [key]: true }));
     setThreads((current) => ({ ...current, [id]: optimistic }));
@@ -634,24 +753,32 @@ export function App() {
     setSelectedThreads((current) => ({ ...current, [projectId]: id }));
     setError(null);
     try {
-      const request = selectedThreadId
-        ? api.sendMessage({
-            projectId,
-            threadId: id,
-            messageId,
-            text: submitted,
-            attachmentIds: draft.attachments?.map((file) => file.id),
-          })
-        : api.startThread({
-            projectId,
-            threadId: id,
-            messageId,
-            harness: draft.harness,
-            prompt: submitted,
-            designIds: draft.designIds,
-            settings: draft.settings,
-            attachmentIds: draft.attachments?.map((file) => file.id),
-          });
+      const request = (async () => {
+        const designContext = await canvasHandle?.captureContext();
+        if (preparation.cancelled) throw new Error("The turn was stopped before it started.");
+        preparing.current.delete(id);
+        return selectedThreadId
+          ? api.sendMessage({
+              projectId,
+              threadId: id,
+              messageId,
+              text: submitted,
+              designContext,
+              designIds: references,
+              attachmentIds: draft.attachments?.map((file) => file.id),
+            })
+          : api.startThread({
+              projectId,
+              threadId: id,
+              messageId,
+              harness: draft.harness,
+              prompt: submitted,
+              designIds: references,
+              designContext,
+              settings: draft.settings,
+              attachmentIds: draft.attachments?.map((file) => file.id),
+            });
+      })();
       pendingStarts.current.set(id, request);
       const value = await request;
       setThreads((current) => ({
@@ -720,9 +847,10 @@ export function App() {
         setSelectedThreads((current) =>
           current[projectId] === id ? { ...current, [projectId]: null } : current,
         );
-      setError({ projectId, text: errorText(value), original: value });
+      if (!preparation.cancelled) setError({ projectId, text: errorText(value), original: value });
     } finally {
       pendingStarts.current.delete(id);
+      preparing.current.delete(id);
       sendingKeys.current.delete(key);
       setSending((current) => ({ ...current, [key]: false }));
     }
@@ -810,6 +938,13 @@ export function App() {
     [api, project, updatingDone],
   );
 
+  async function stop() {
+    if (!api || !project || !thread) return;
+    const preparation = preparing.current.get(thread.id);
+    if (preparation) preparation.cancelled = true;
+    queue.stop();
+  }
+
   async function refreshHarnesses() {
     if (!api) return;
     try {
@@ -817,23 +952,6 @@ export function App() {
     } catch (value) {
       setError({ text: errorText(value), original: value });
     }
-  }
-
-  function onTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    const next =
-      event.key === "ArrowRight"
-        ? (index + 1) % modes.length
-        : event.key === "ArrowLeft"
-          ? (index + modes.length - 1) % modes.length
-          : event.key === "Home"
-            ? 0
-            : event.key === "End"
-              ? modes.length - 1
-              : -1;
-    if (next < 0) return;
-    event.preventDefault();
-    setMode(modes[next].id);
-    document.getElementById(`workspace-tab-${modes[next].id}`)?.focus();
   }
 
   const renderThread = useCallback(
@@ -844,7 +962,14 @@ export function App() {
         selected={selectedThreadId === item.id}
         now={now}
         pending={Boolean(updatingDone[item.id] || settingsPending[item.id])}
-        onSelect={() => selectThread(project!.id, item.id)}
+        onSelect={() =>
+          selectThread(
+            project!.id,
+            item.id,
+            view === "design" &&
+              Boolean(selectedDesignId && item.designIds.includes(selectedDesignId)),
+          )
+        }
         onDone={() => void toggleThreadDone(item)}
         modelName={
           harnessDetails[`${project?.id}:${item.harness}`]?.info?.models.find(
@@ -862,6 +987,8 @@ export function App() {
       updatingDone,
       settingsPending,
       selectThread,
+      view,
+      selectedDesignId,
       project,
       toggleThreadDone,
       harnessDetails,
@@ -883,13 +1010,12 @@ export function App() {
         api={api}
         snapshot={designSnapshot}
         navigationTarget={designNavigation}
-        onOpen={(id) => setSelectedDesigns((current) => ({ ...current, [project.id]: id }))}
+        onBrowse={browseFiles}
+        browsing={view === "files"}
+        onOpen={(id) => openDesign(project.id, id, "files")}
         onCreated={(value) => {
           updateLocalDesign(value);
-          setSelectedDesigns((current) => ({
-            ...current,
-            [project.id]: value.id,
-          }));
+          openDesign(project.id, value.id, "files");
         }}
         onUpdate={updateLocalDesign}
         onFolderUpdate={(folder) =>
@@ -906,15 +1032,11 @@ export function App() {
         }
       />
     );
-  }, [api, designSnapshot, designNavigation, updateLocalDesign]);
+  }, [api, designSnapshot, designNavigation, updateLocalDesign, view, browseFiles, openDesign]);
 
   return (
-    <div className={`desktop ${mode === "design" && design ? "desktop-canvas-focused" : ""}`}>
-      <aside
-        className="desktop-navigation"
-        aria-label="Project workspace"
-        hidden={mode === "design" && Boolean(design)}
-      >
+    <div className="desktop connected-desktop">
+      <aside className="desktop-navigation" aria-label="Project workspace">
         <header className="workspace-header">
           <div className="project-picker" title={project?.name}>
             {project && (
@@ -934,60 +1056,23 @@ export function App() {
               />
             )}
           </div>
-          <div role="tablist" aria-label="Workspace" className="workspace-tabs">
-            {modes.map((item, index) => (
-              <Button
-                key={item.id}
-                id={`workspace-tab-${item.id}`}
-                type="button"
-                role="tab"
-                aria-selected={mode === item.id}
-                aria-controls={`workspace-panel-${item.id}`}
-                tabIndex={mode === item.id ? 0 : -1}
-                className="workspace-tab"
-                onClick={() => setMode(item.id)}
-                onKeyDown={(event) => onTabKeyDown(event, index)}
-              >
-                {item.id === "design" ? (
-                  <Icon name="frame" size={14} />
-                ) : (
-                  <svg
-                    className="code-mode-icon"
-                    aria-hidden="true"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.4"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="m6 4-4 4 4 4m4-8 4 4-4 4" />
-                  </svg>
-                )}
-                {item.label}
-              </Button>
-            ))}
-          </div>
         </header>
         {project && snapshot && (
           <>
-            <div className="sidebar-mode-content" hidden={mode !== "code"}>
+            <nav
+              ref={setDesignNavigation}
+              className="design-navigation"
+              aria-label="Files and folders"
+            />
+            <div className="thread-navigation">
               <ThreadSidebar
                 key={project.id}
                 projectId={project.id}
                 threads={snapshot.threads}
-                onNew={() => selectThread(project.id, null)}
+                onNew={() => selectThread(project.id, null, view === "design")}
                 renderThread={renderThread}
               />
             </div>
-            <nav
-              ref={setDesignNavigation}
-              className="design-navigation"
-              aria-label="Design folders"
-              hidden={mode !== "design"}
-            />
           </>
         )}
         <AppUpdate api={api} />
@@ -1031,323 +1116,361 @@ export function App() {
             )}
           </div>
         ) : (
-          <>
+          <div
+            className={`connected-workspace ${threadVisible ? "with-thread" : ""} ${showSurface ? "with-surface" : ""}`}
+            data-view={view}
+          >
             <section
-              id="workspace-panel-design"
-              role="tabpanel"
-              aria-labelledby="workspace-tab-design"
-              hidden={mode !== "design"}
-              className="project-workspace canvas-open"
+              className="work-surface"
+              aria-label={
+                view === "design"
+                  ? "Design editor"
+                  : view === "files"
+                    ? "Project files"
+                    : "Working files"
+              }
+              hidden={!showSurface}
             >
-              <div className="design-workspace">
+              <div className="editor-surface" hidden={view !== "design"}>
                 {design && (
-                  <LocalCanvas
-                    key={design.id}
+                  <CanvasSurface
+                    key={`${project.id}:${design.id}`}
+                    ref={canvas}
                     api={api!}
                     projectId={project.id}
-                    initial={design}
-                    active={mode === "design"}
+                    fileId={design.id}
+                    active={view === "design"}
+                    backLabel={
+                      canvasReturns[project.id] === "thread" ? "Return to thread" : "Back to files"
+                    }
                     onBack={backToFiles}
                     onUpdate={updateLocalDesign}
+                    onContextChange={setCanvasSelection}
+                    threadControl={fileThreadControl}
                   />
                 )}
-                {api && (
-                  <div className="project-files-container" hidden={Boolean(design)}>
-                    {projectFiles}
-                  </div>
+                {!design && (
+                  <div className="working-unavailable">This design is no longer available.</div>
+                )}
+              </div>
+              <div className="project-files-container" hidden={view !== "files"}>
+                {projectFiles}
+              </div>
+              <div className="thread-working-surface" hidden={view !== "thread"}>
+                {hasWorkingFiles && (
+                  <WorkingPane
+                    key={`${project.id}:${selectedThreadId ?? "draft"}`}
+                    projectId={project.id}
+                    api={api!}
+                    surface={workingSurface}
+                    onSurfaceChange={changeWorkingSurface}
+                    previewURL={previewURL}
+                    previewAvailable={previewAvailable}
+                    onPreviewURL={changePreviewURL}
+                    designs={snapshot.designs}
+                    ids={workingIds}
+                    thread={thread}
+                    active={view === "thread"}
+                    onOpen={openWorkingDesign}
+                  />
                 )}
               </div>
             </section>
             <section
-              id="workspace-panel-code"
-              role="tabpanel"
-              aria-labelledby="workspace-tab-code"
-              hidden={mode !== "code"}
-              className="project-workspace"
+              id="thread-pane"
+              className="thread-workspace"
+              aria-label="Thread"
+              hidden={!threadVisible}
             >
-              <div className="thread-workspace">
-                <div className="content-heading">
-                  <h1>{thread?.title ?? (selectedThreadId ? "Opening thread…" : "New thread")}</h1>
-                  {thread?.doneAt && (
-                    <Button
-                      className="quiet-button thread-heading-action"
-                      disabled={running || Boolean(updatingDone[thread.id])}
-                      onClick={() => void toggleThreadDone(summarizeThread(thread))}
-                    >
-                      Reopen thread
-                    </Button>
-                  )}
-                </div>
-                <Conversation
-                  key={`${project.id}:${selectedThreadId ?? "draft"}`}
-                  identity={`${project.id}:${selectedThreadId ?? "draft"}`}
-                  thread={thread}
-                  active={mode === "code"}
-                  api={api!}
-                  references={
-                    thread?.designIds.map(
-                      (id) =>
-                        snapshot.designs.find((design) => design.id === id)?.name ??
-                        "Design reference",
-                    ) ?? []
-                  }
-                />
-                {thread?.pendingApprovals?.length && api ? (
-                  <ApprovalRequests
-                    key={thread.id}
-                    requests={thread.pendingApprovals}
-                    onRespond={async (id, decision) => {
-                      const value = await api.respondToApproval(
-                        project.id,
-                        thread.id,
-                        id,
-                        decision,
-                      );
-                      setThreads((current) => ({
-                        ...current,
-                        [value.id]:
-                          (current[value.id]?.revision ?? -1) > value.revision
-                            ? current[value.id]
-                            : value,
-                      }));
+              <div className="content-heading">
+                <h1>
+                  {thread?.title ??
+                    selectedSummary?.title ??
+                    (selectedThreadId ? "Opening thread…" : "New thread")}
+                </h1>
+                {selectedThreadId && !previewAvailable && (
+                  <Button
+                    className="quiet-button thread-preview-action"
+                    onClick={() => {
+                      changeWorkingSurface("preview");
+                      setViews((current) => ({ ...current, [project.id]: "thread" }));
                     }}
-                  />
-                ) : null}
-                {thread && (
-                  <MessageQueue
-                    key={`queue:${thread.id}`}
-                    messages={queue.messages}
-                    running={running}
-                    error={thread.queueError}
-                    onChange={queue.change}
-                    onRecover={queue.recover}
+                  >
+                    Preview app
+                  </Button>
+                )}
+                {thread?.doneAt && (
+                  <Button
+                    className="quiet-button thread-heading-action"
+                    disabled={running || Boolean(updatingDone[thread.id])}
+                    onClick={() => void toggleThreadDone(summarizeThread(thread))}
+                  >
+                    Reopen thread
+                  </Button>
+                )}
+              </div>
+              <Conversation
+                key={`${project.id}:${selectedThreadId ?? "draft"}`}
+                identity={`${project.id}:${selectedThreadId ?? "draft"}`}
+                thread={thread}
+                active={threadVisible}
+                api={api!}
+              />
+              {thread?.pendingApprovals?.length && api ? (
+                <ApprovalRequests
+                  key={thread.id}
+                  requests={thread.pendingApprovals}
+                  onRespond={async (id, decision) => {
+                    const value = await api.respondToApproval(project.id, thread.id, id, decision);
+                    setThreads((current) => ({
+                      ...current,
+                      [value.id]:
+                        (current[value.id]?.revision ?? -1) > value.revision
+                          ? current[value.id]
+                          : value,
+                    }));
+                  }}
+                />
+              ) : null}
+              {thread && (
+                <MessageQueue
+                  key={`queue:${thread.id}`}
+                  messages={queue.messages}
+                  running={running}
+                  error={thread.queueError}
+                  onChange={queue.change}
+                  onRecover={queue.recover}
+                />
+              )}
+              <form
+                className="composer"
+                onDragOver={(event) => {
+                  if (event.dataTransfer.types.includes("Files") && !thread?.doneAt)
+                    event.preventDefault();
+                }}
+                onDrop={(event) => {
+                  if (event.dataTransfer.files.length) {
+                    event.preventDefault();
+                    attachFiles(Array.from(event.dataTransfer.files));
+                  }
+                }}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void send();
+                }}
+              >
+                {view === "design" && design && (
+                  <div className="composer-design-context">
+                    <Icon name="frame" size={13} />
+                    <span>{design.name}</span>
+                    {canvasSelection?.fileId === design.id &&
+                      canvasSelection.nodeIds.length > 0 && (
+                        <span className="muted">{canvasSelection.nodeIds.length} selected</span>
+                      )}
+                  </div>
+                )}
+                {snapshot.designs.length > 0 && (
+                  <DesignReferences
+                    designs={snapshot.designs}
+                    selected={draft.designIds}
+                    attached={thread?.designIds}
+                    onChange={(designIds) => updateDraft({ designIds })}
                   />
                 )}
-                <form
-                  className="composer"
-                  onDragOver={(event) => {
-                    if (event.dataTransfer.types.includes("Files") && !thread?.doneAt)
-                      event.preventDefault();
+                <AttachmentList
+                  files={draft.attachments ?? []}
+                  onRemove={
+                    thread?.doneAt
+                      ? undefined
+                      : (id) =>
+                          updateDraft({
+                            attachments: draft.attachments?.filter((file) => file.id !== id),
+                          })
+                  }
+                />
+                {Boolean(uploading[draftKey]) && (
+                  <span className="attachment-progress" role="status">
+                    Adding attachments…
+                  </span>
+                )}
+                <input
+                  ref={fileInput}
+                  type="file"
+                  multiple
+                  hidden
+                  aria-label="Attach files"
+                  onChange={(event) => {
+                    attachFiles(Array.from(event.currentTarget.files ?? []));
+                    event.currentTarget.value = "";
                   }}
-                  onDrop={(event) => {
-                    if (event.dataTransfer.files.length) {
+                />
+                <label className="sr-only" htmlFor="thread-prompt">
+                  Message
+                </label>
+                <textarea
+                  id="thread-prompt"
+                  value={draft.text}
+                  onChange={(event) => updateDraft({ text: event.target.value })}
+                  onPaste={(event) => {
+                    const files = Array.from(event.clipboardData.files);
+                    if (files.length) {
                       event.preventDefault();
-                      attachFiles(Array.from(event.dataTransfer.files));
+                      attachFiles(files);
                     }
                   }}
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void send();
-                  }}
-                >
-                  {!thread && snapshot.designs.length > 0 && (
-                    <DesignReferences
-                      designs={snapshot.designs}
-                      selected={draft.designIds}
-                      onChange={(designIds) => updateDraft({ designIds })}
-                    />
-                  )}
-                  <AttachmentList
-                    files={draft.attachments ?? []}
-                    onRemove={
-                      thread?.doneAt
-                        ? undefined
-                        : (id) =>
-                            updateDraft({
-                              attachments: draft.attachments?.filter((file) => file.id !== id),
-                            })
+                  placeholder={
+                    thread?.doneAt
+                      ? "Reopen this thread to continue…"
+                      : running
+                        ? "Queue a follow-up, or send it now…"
+                        : thread
+                          ? "Continue this thread…"
+                          : "What would you like to work on?"
+                  }
+                  disabled={Boolean(thread?.doneAt) || busy}
+                  maxLength={32_000}
+                  rows={2}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      event.shiftKey &&
+                      (event.metaKey || event.ctrlKey) &&
+                      running &&
+                      !event.nativeEvent.isComposing
+                    ) {
+                      event.preventDefault();
+                      const first = queue.messages[0];
+                      if (first && !event.repeat)
+                        queue.change({ kind: "steer", messageId: first.id });
+                      return;
                     }
-                  />
-                  {Boolean(uploading[draftKey]) && (
-                    <span className="attachment-progress" role="status">
-                      Adding attachments…
-                    </span>
-                  )}
-                  <input
-                    ref={fileInput}
-                    type="file"
-                    multiple
-                    hidden
+                    if (
+                      event.key === "Enter" &&
+                      !event.shiftKey &&
+                      !event.altKey &&
+                      !event.nativeEvent.isComposing &&
+                      event.nativeEvent.keyCode !== 229
+                    ) {
+                      event.preventDefault();
+                      if (!event.repeat)
+                        void send(event.metaKey || event.ctrlKey ? "steer" : "queue");
+                    }
+                  }}
+                />
+                <div className="composer-actions">
+                  <Button
+                    type="button"
+                    className="quiet-button attachment-button"
                     aria-label="Attach files"
-                    onChange={(event) => {
-                      attachFiles(Array.from(event.currentTarget.files ?? []));
-                      event.currentTarget.value = "";
-                    }}
-                  />
-                  <label className="sr-only" htmlFor="thread-prompt">
-                    Message
-                  </label>
-                  <textarea
-                    id="thread-prompt"
-                    value={draft.text}
-                    onChange={(event) => updateDraft({ text: event.target.value })}
-                    onPaste={(event) => {
-                      const files = Array.from(event.clipboardData.files);
-                      if (files.length) {
-                        event.preventDefault();
-                        attachFiles(files);
-                      }
-                    }}
-                    placeholder={
-                      thread?.doneAt
-                        ? "Reopen this thread to continue…"
-                        : running
-                          ? "Queue a follow-up, or send it now…"
-                          : thread
-                            ? "Continue this thread…"
-                            : "What would you like to work on?"
-                    }
+                    title="Attach files"
                     disabled={Boolean(thread?.doneAt) || busy}
-                    maxLength={32_000}
-                    rows={2}
-                    onKeyDown={(event) => {
-                      if (
-                        event.key === "Enter" &&
-                        event.shiftKey &&
-                        (event.metaKey || event.ctrlKey) &&
-                        running &&
-                        !event.nativeEvent.isComposing
-                      ) {
-                        event.preventDefault();
-                        const first = queue.messages[0];
-                        if (first && !event.repeat)
-                          queue.change({ kind: "steer", messageId: first.id });
-                        return;
-                      }
-                      if (
-                        event.key === "Enter" &&
-                        !event.shiftKey &&
-                        !event.altKey &&
-                        !event.nativeEvent.isComposing &&
-                        event.nativeEvent.keyCode !== 229
-                      ) {
-                        event.preventDefault();
-                        if (!event.repeat)
-                          void send(event.metaKey || event.ctrlKey ? "steer" : "queue");
-                      }
+                    onClick={() => fileInput.current?.click()}
+                  >
+                    <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none">
+                      <path
+                        d="m8 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </Button>
+                  <HarnessControls
+                    api={api!}
+                    connections={harnesses}
+                    harness={selectedHarness}
+                    settings={thread?.settings ?? draft.settings ?? {}}
+                    actualModel={thread?.actualModel}
+                    usage={thread?.usage}
+                    details={currentDetails?.info}
+                    error={currentDetails?.error}
+                    loading={Boolean(currentDetails?.loading)}
+                    disabled={Boolean(
+                      running || busy || (thread && settingsPending[thread.id]) || thread?.doneAt,
+                    )}
+                    onHarnessChange={
+                      thread ? undefined : (harness) => updateDraft({ harness, settings: {} })
+                    }
+                    onSettingsChange={(settings) => void changeSettings(settings)}
+                    onRefresh={() => {
+                      if (project && harnessReady)
+                        void loadHarnessDetails(project.id, selectedHarness, true);
                     }}
                   />
-                  <div className="composer-actions">
-                    <Button
-                      type="button"
-                      className="quiet-button attachment-button"
-                      aria-label="Attach files"
-                      title="Attach files"
-                      disabled={Boolean(thread?.doneAt) || busy}
-                      onClick={() => fileInput.current?.click()}
-                    >
-                      <svg
-                        aria-hidden="true"
-                        width="17"
-                        height="17"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                      >
-                        <path
-                          d="m8 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </Button>
-                    <HarnessControls
-                      api={api!}
-                      connections={harnesses}
-                      harness={selectedHarness}
-                      settings={thread?.settings ?? draft.settings ?? {}}
-                      actualModel={thread?.actualModel}
-                      usage={thread?.usage}
-                      details={currentDetails?.info}
-                      error={currentDetails?.error}
-                      loading={Boolean(currentDetails?.loading)}
-                      disabled={Boolean(
-                        running || busy || (thread && settingsPending[thread.id]) || thread?.doneAt,
-                      )}
-                      onHarnessChange={
-                        thread ? undefined : (harness) => updateDraft({ harness, settings: {} })
-                      }
-                      onSettingsChange={(settings) => void changeSettings(settings)}
-                      onRefresh={() => {
-                        if (project && harnessReady)
-                          void loadHarnessDetails(project.id, selectedHarness, true);
-                      }}
-                    />
-                    <span className="composer-spacer" />
-                    <div className="composer-delivery">
-                      {running && !hasMessage ? (
-                        <Button
-                          type="button"
-                          className="composer-submit composer-stop"
-                          aria-label={
-                            queue.stopping || thread?.activity === "Stopping" ? "Stopping…" : "Stop"
-                          }
-                          title={
-                            queue.stopping || thread?.activity === "Stopping" ? "Stopping…" : "Stop"
-                          }
-                          disabled={queue.stopping || thread?.activity === "Stopping"}
-                          onClick={() => queue.stop()}
-                        >
-                          <MessageActionIcon action="stop" />
-                        </Button>
-                      ) : (
-                        <>
-                          {running && (
-                            <Button
-                              type="button"
-                              className="quiet-button composer-steer"
-                              disabled={!canSend}
-                              title="Use this instruction now (Ctrl/⌘ Enter)"
-                              onClick={() => void send("steer")}
-                            >
-                              <MessageActionIcon action="steer" />
-                              Send now
-                            </Button>
-                          )}
-                          <Button
-                            type="submit"
-                            className="composer-submit"
-                            disabled={!canSend}
-                            aria-label={submitLabel}
-                            title={`${submitLabel} (Enter)`}
-                          >
-                            {busy ? (
-                              <Icon name="more" size={16} />
-                            ) : (
-                              <MessageActionIcon
-                                action={running || queue.messages.length ? "queue" : "send"}
-                              />
-                            )}
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  {!harnessReady && (
-                    <div className="connection-help">
-                      <span>
-                        {harnesses.find((item) => item.id === selectedHarness)?.name ??
-                          "Your harness"}{" "}
-                        needs to be installed and signed in locally. Run{" "}
-                        <code>
-                          {selectedHarness === "codex" ? "codex login" : "claude auth login"}
-                        </code>{" "}
-                        in your terminal.
-                      </span>
+                  <span className="composer-spacer" />
+                  <div className="composer-delivery">
+                    {running && !hasMessage ? (
                       <Button
                         type="button"
-                        className="quiet-button"
-                        onClick={() => void refreshHarnesses()}
+                        className="composer-submit composer-stop"
+                        aria-label={
+                          queue.stopping || thread?.activity === "Stopping" ? "Stopping…" : "Stop"
+                        }
+                        title={
+                          queue.stopping || thread?.activity === "Stopping" ? "Stopping…" : "Stop"
+                        }
+                        disabled={queue.stopping || thread?.activity === "Stopping"}
+                        onClick={() => void stop()}
                       >
-                        Check connection
+                        <MessageActionIcon action="stop" />
                       </Button>
-                    </div>
-                  )}
-                </form>
-              </div>
+                    ) : (
+                      <>
+                        {running && (
+                          <Button
+                            type="button"
+                            className="quiet-button composer-steer"
+                            disabled={!canSend}
+                            title="Use this instruction now (Ctrl/⌘ Enter)"
+                            onClick={() => void send("steer")}
+                          >
+                            <MessageActionIcon action="steer" />
+                            Send now
+                          </Button>
+                        )}
+                        <Button
+                          type="submit"
+                          className="composer-submit"
+                          disabled={!canSend}
+                          aria-label={submitLabel}
+                          title={`${submitLabel} (Enter)`}
+                        >
+                          {busy ? (
+                            <Icon name="more" size={16} />
+                          ) : (
+                            <MessageActionIcon
+                              action={running || queue.messages.length ? "queue" : "send"}
+                            />
+                          )}
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                {!harnessReady && (
+                  <div className="connection-help">
+                    <span>
+                      {harnesses.find((item) => item.id === selectedHarness)?.name ??
+                        "Your harness"}{" "}
+                      needs to be installed and signed in locally. Run{" "}
+                      <code>
+                        {selectedHarness === "codex" ? "codex login" : "claude auth login"}
+                      </code>{" "}
+                      in your terminal.
+                    </span>
+                    <Button
+                      type="button"
+                      className="quiet-button"
+                      onClick={() => void refreshHarnesses()}
+                    >
+                      Check connection
+                    </Button>
+                  </div>
+                )}
+              </form>
             </section>
-          </>
+          </div>
         )}
       </main>
     </div>
@@ -1358,22 +1481,27 @@ function DesignReferences({
   designs,
   selected,
   onChange,
+  attached = [],
 }: {
   designs: DesignSummary[];
   selected: string[];
+  attached?: string[];
   onChange: (value: string[]) => void;
 }) {
   return (
     <details className="design-references">
-      <summary>Design references{selected.length ? ` (${selected.length})` : ""}</summary>
+      <summary>Add designs{selected.length ? ` (${selected.length})` : ""}</summary>
       <div className="reference-options">
         {designs.map((design) => (
           <Button
             key={design.id}
             type="button"
-            aria-pressed={selected.includes(design.id)}
+            aria-pressed={selected.includes(design.id) || attached.includes(design.id)}
             className="reference-option"
-            disabled={!selected.includes(design.id) && selected.length >= 20}
+            disabled={
+              attached.includes(design.id) ||
+              (!selected.includes(design.id) && new Set([...selected, ...attached]).size >= 20)
+            }
             onClick={() =>
               onChange(
                 selected.includes(design.id)
@@ -1383,10 +1511,84 @@ function DesignReferences({
             }
           >
             <span>{design.name}</span>
-            <span aria-hidden="true">{selected.includes(design.id) ? "✓" : "+"}</span>
+            <span aria-hidden="true">
+              {selected.includes(design.id) || attached.includes(design.id) ? "✓" : "+"}
+            </span>
           </Button>
         ))}
       </div>
     </details>
   );
 }
+
+const CanvasSurface = memo(function CanvasSurface({
+  fileId,
+  projectId,
+  api,
+  active,
+  onBack,
+  onUpdate,
+  ref,
+  threadControl,
+  onContextChange,
+  backLabel,
+}: {
+  fileId: string;
+  projectId: string;
+  api: NonNullable<Window["tidy"]>;
+  active: boolean;
+  onBack(): void;
+  onUpdate(value: LocalDesign): void;
+  ref: React.Ref<LocalCanvasHandle>;
+  threadControl: ReactNode;
+  backLabel: string;
+  onContextChange(context: { fileId: string; pageId: string; nodeIds: string[] }): void;
+}) {
+  const { value, error } = useDesign(projectId, fileId);
+  const repository = useDesignRepository();
+  const container = useRef<HTMLDivElement>(null);
+  const [compact, setCompact] = useState<boolean>();
+  useLayoutEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    const measure = () => {
+      const width = element.getBoundingClientRect().width;
+      if (width > 0) setCompact(width < 1000);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <div ref={container} className="canvas-host">
+      {value && compact !== undefined ? (
+        <LocalCanvas
+          ref={ref}
+          api={api}
+          projectId={projectId}
+          initial={value}
+          active={active}
+          onBack={onBack}
+          onUpdate={onUpdate}
+          threadControl={threadControl}
+          onContextChange={onContextChange}
+          backLabel={backLabel}
+          compact={compact}
+        />
+      ) : !value ? (
+        <div className="working-unavailable">
+          <span>{error ?? "Opening design…"}</span>
+          {error && (
+            <Button
+              className="quiet-button"
+              onClick={() => void repository.load(projectId, fileId).catch(() => {})}
+            >
+              Retry
+            </Button>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+});

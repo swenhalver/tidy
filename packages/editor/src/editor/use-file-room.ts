@@ -485,6 +485,7 @@ export function useFileRoom({
     clearPreview,
     getSnapshot,
     hasPendingEdits,
+    whenSettled: () => edits.whenSettled(),
     restore: reconcile,
     receive,
   };

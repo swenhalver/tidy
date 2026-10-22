@@ -27,9 +27,13 @@ function bounds(boxes: Box[]): Box {
 export function DocumentPreview({
   content,
   assetUrl = hostedAssetUrl,
+  pageId,
+  nodeIds,
 }: {
   content: DesignDocument;
   assetUrl?: (id: string) => string;
+  pageId?: string;
+  nodeIds?: string[];
 }) {
   const element = useRef<SVGSVGElement>(null);
   const [measured, setMeasured] = useState<Map<string, { width: number; height: number }>>(
@@ -44,8 +48,13 @@ export function DocumentPreview({
   );
   const colors = useMemo(() => resolvedColorTokens(content), [content]);
   const page = useMemo(
-    () => pageNodes(renderedContent, documentPages(renderedContent)[0].id),
-    [renderedContent],
+    () =>
+      pageNodes(
+        renderedContent,
+        documentPages(renderedContent).find((page) => page.id === pageId)?.id ??
+          documentPages(renderedContent)[0].id,
+      ),
+    [renderedContent, pageId],
   );
   useDocumentFonts(page);
   useLayoutEffect(() => {
@@ -93,7 +102,16 @@ export function DocumentPreview({
   }, [page]);
   const preview = useMemo(() => {
     const nodes = page;
-    const roots = nodes.filter((node) => node.parentId === null && node.visible);
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const targets = new Set<string>();
+    for (const id of nodeIds ?? []) {
+      let node = byId.get(id);
+      while (node?.parentId) node = byId.get(node.parentId);
+      if (node) targets.add(node.id);
+    }
+    const roots = nodes.filter(
+      (node) => node.parentId === null && node.visible && (!targets.size || targets.has(node.id)),
+    );
     if (!roots.length) return null;
     const children = childrenByParent(nodes);
     const visibleBoxes: Box[] = [];
@@ -136,7 +154,7 @@ export function DocumentPreview({
         height: Math.max(1, area.height + margin * 2),
       },
     };
-  }, [page, measured]);
+  }, [page, measured, nodeIds]);
   if (!preview) return null;
   const { roots, children, crop } = preview;
 

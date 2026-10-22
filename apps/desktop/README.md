@@ -10,10 +10,10 @@ Open a local directory as a project. Tidy restores the last opened project and
 keeps its design materials and engineering threads together. No cloud account or
 database is needed for project storage.
 
-The sidebar Design and Code tabs switch between separate workspace views, with
-Design selected initially. Both views stay mounted while switching, and each project
-retains its selected thread, design and composer drafts during the app session.
-The tabs support arrow keys, Home and End.
+Files, folders and threads share the project sidebar. Threads can cover design,
+implementation, debugging or any other engineering work; no design attachment is
+required. Each project retains its selected file, thread and composer drafts during
+the app session.
 
 ## Projects and threads
 
@@ -23,13 +23,44 @@ The tabs support arrow keys, Home and End.
    folders inline in the sidebar. New file, import, and grid/list controls share
    the browser header. New files belong to the selected folder. File menus support
    renaming and moving. Documents use the same editor as web and persist edits
-   immediately. Opening a canvas hides the project sidebar; Back restores the
-   previous folder. Web asset downloads are not yet an import path.
-3. In Code, choose Codex or Claude Code, optionally attach design references, and
-   start a thread. The harness runs in the project root and receives the attached
-   design file paths. Follow-up messages resume the locally bound native harness session.
+   immediately. Back restores the previous folder. Web asset downloads are not yet
+   an import path.
+3. Choose New thread in the sidebar for project engineering work, or Threads in a
+   design to work beside its canvas. Choose Codex or Claude Code and send a request.
+   Starting from a design automatically includes the current file, page, selection
+   and accepted file revision. Follow-ups from the editor carry the current context
+   and resume the same native harness session. Design context never changes harness
+   permissions. Pending canvas commits settle before context is sent; stale or
+   missing selections restore the draft rather than launching an ambiguous turn.
 4. Stop cancels the active process and its commands. Closing the app stops active
    runs; an interrupted run is never silently restarted. Send a message to continue.
+
+Entering through a thread shows its working designs as live previews next to the
+conversation. Expand file opens the full editor with the same conversation; Return
+to thread restores the preview. Expanding/collapsing the current file keeps its editor,
+selection, viewport and undo history mounted. Opening a different file creates a new
+editor. Smaller workspace panes use compact editor controls and narrow windows stack
+the conversation below the working surface.
+
+Use Add designs to associate more files with a new or existing thread. Working files
+include those references and known project designs explicitly reported by that
+thread's tools. File edits and their reported inputs/output can also be inspected in
+the Changes surface. Tidy does not infer attribution from unrelated filesystem changes
+or invent diffs when the harness only reports file paths.
+
+Preview app opens a working surface for an explicitly entered localhost app URL.
+The desktop app embeds an interactive isolated browser beside the conversation;
+Reload refreshes it without starting or restarting a server. URLs and surface choices
+are retained per thread during the app session. Switching surfaces hides the browser
+without reloading the current app. Browser development offers a separate browser link.
+Starting development servers remains part of the engineering thread's harness work.
+Native file-window detachment is not part of this workspace change.
+
+Visible file cards, thread previews and the editor share a bounded document cache and
+deduplicate reads. Accepted edits update subscribers immediately; disk notifications
+refresh the affected loaded documents while keeping the last valid content visible.
+Direct harness writes still use filesystem refresh and stale-write detection rather
+than a shared operation protocol for concurrent agents.
 
 Tidy uses the installed CLIs and their existing sign-ins. Install and sign in to
 Codex (`codex login`) or Claude Code (`claude auth login`), then use Check connection

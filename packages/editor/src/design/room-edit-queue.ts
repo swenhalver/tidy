@@ -34,6 +34,11 @@ export class RoomEditQueue {
     return this.pending.length > 0;
   }
 
+  /** Resolve after all edits submitted so far have been acknowledged or rejected. */
+  async whenSettled() {
+    await this.queue;
+  }
+
   get saved() {
     return this.authoritative;
   }

@@ -329,6 +329,132 @@ test("design references reach the harness and follow-up messages resume the same
   expect((await service.readThread(project.id, thread.id)).messages[2].text).toBe("Now add tests");
 });
 
+test("general engineering threads can add a design and selection on a resumed turn without changing their harness session", async () => {
+  const { service, store, project, runs } = await fixture();
+  const thread = await service.startThread({
+    projectId: project.id,
+    harness: "codex",
+    prompt: "Fix the checkout handler",
+    designIds: [],
+  });
+  expect(thread.designIds).toEqual([]);
+  const sessionId = randomUUID();
+  runs[0].input.onUpdate({ type: "session", id: sessionId });
+  const completion = finished(service, thread.id);
+  runs[0].complete();
+  await completion;
+  const file = await store.createDesign(project.id);
+  const context = {
+    fileId: file.id,
+    pageId: file.document.pages![0].id,
+    nodeIds: [file.document.nodes[0].id],
+    version: file.version,
+  };
+  const resumed = await service.sendMessage({
+    projectId: project.id,
+    threadId: thread.id,
+    text: "Now improve this frame",
+    designContext: context,
+  });
+  expect(runs[1].input.sessionId).toBe(sessionId);
+  expect(runs[1].input.prompt).toContain(file.path);
+  expect(runs[1].input.prompt).toContain(file.document.nodes[0].id);
+  expect(resumed.designIds).toEqual([file.id]);
+  expect(resumed.messages[1].designContext).toEqual(context);
+  expect((await store.readThread(project.id, thread.id)).messages[1].designContext).toEqual(
+    context,
+  );
+});
+
+test("stale revisions, missing layers and foreign design context cannot launch a harness or persist a turn", async () => {
+  const { service, store, project, runs, directory } = await fixture();
+  const file = await store.createDesign(project.id);
+  const context = {
+    fileId: file.id,
+    pageId: file.document.pages![0].id,
+    nodeIds: [file.document.nodes[0].id],
+    version: file.version,
+  };
+  await store.updateDesign({
+    projectId: project.id,
+    designId: file.id,
+    expectedVersion: file.version,
+    name: "Updated externally",
+  });
+  await expect(
+    service.startThread({
+      projectId: project.id,
+      harness: "codex",
+      prompt: "Change this",
+      designIds: [],
+      designContext: context,
+    }),
+  ).rejects.toThrow("changed before");
+  const latest = await store.readDesign(project.id, file.id);
+  await expect(
+    service.startThread({
+      projectId: project.id,
+      harness: "codex",
+      prompt: "Change this",
+      designIds: [],
+      designContext: { ...context, version: latest.version, nodeIds: ["missing"] },
+    }),
+  ).rejects.toThrow("page or layers changed");
+  const otherRoot = join(directory, "other");
+  await mkdir(otherRoot);
+  const other = await store.open(otherRoot);
+  await expect(
+    service.startThread({
+      projectId: other.project.id,
+      harness: "codex",
+      prompt: "Change this",
+      designIds: [],
+      designContext: { ...context, version: latest.version },
+    }),
+  ).rejects.toThrow();
+  expect(runs).toHaveLength(0);
+  expect((await store.snapshot(project.id)).threads).toHaveLength(0);
+  const started = await service.startThread({
+    projectId: project.id,
+    harness: "codex",
+    prompt: "Iterate on this design",
+    designIds: [],
+    designContext: { ...context, version: latest.version },
+  });
+  expect(started.messages[0].designContext?.version).toBe(latest.version);
+});
+
+test("a deleted historical design does not prevent subsequent coding work, while new missing references still fail", async () => {
+  const { service, store, project, runs } = await fixture();
+  const file = await store.createDesign(project.id);
+  const thread = await service.startThread({
+    projectId: project.id,
+    harness: "codex",
+    prompt: "Use this design",
+    designIds: [file.id],
+  });
+  const completion = finished(service, thread.id);
+  runs[0].complete();
+  await completion;
+  await rm(file.path);
+  const resumed = await service.sendMessage({
+    projectId: project.id,
+    threadId: thread.id,
+    text: "Fix an unrelated server error",
+  });
+  expect(resumed.messages).toHaveLength(2);
+  expect(runs[1].input.prompt).toContain("currently unavailable");
+  await expect(
+    service.startThread({
+      projectId: project.id,
+      harness: "codex",
+      prompt: "Use a missing design",
+      designIds: [file.id],
+    }),
+  ).rejects.toThrow();
+  expect(runs).toHaveLength(2);
+});
+
 test("projects remain isolated, concurrent turns are rejected and stopping fences late output", async () => {
   const { directory, service, store, project, runs } = await fixture();
   const root = join(directory, "second");

@@ -108,7 +108,7 @@ import { EditorThumbnail } from "../host-thumbnail";
 import type { Review } from "../lib/github/review-contract";
 import { CanvasComments, type CanvasCommentsHandle } from "./canvas-comments";
 import { LayerContextMenu, type LayerMenuItem } from "./layer-context-menu";
-import { useEditorHost } from "../host";
+import { useEditorHost, type EditorThreadContext } from "../host";
 import { useFileRoom } from "./use-file-room";
 import { CollaboratorOverlay } from "./collaborator-overlay";
 import {
@@ -353,6 +353,9 @@ export function FileEditor({
   initialFocusNodeId,
   agentSetup,
   agents: initialAgents,
+  threadControl: suppliedThreadControl,
+  onThreadContextChange,
+  compact = false,
 }: {
   fileId: string;
   fileName: string;
@@ -386,6 +389,9 @@ export function FileEditor({
   initialFocusNodeId?: string;
   agentSetup?: EditorAgentSetup;
   agents?: ThreadsWorkspaceProps | Promise<ThreadsWorkspaceProps | undefined>;
+  threadControl?: ReactNode;
+  onThreadContextChange?: (context: EditorThreadContext) => void;
+  compact?: boolean;
 }) {
   const activeRef = useRef(active);
   useLayoutEffect(() => {
@@ -394,7 +400,8 @@ export function FileEditor({
   const { renameFile: renameDesignFile, reportError: createReporter } = useEditorHost();
   // Archived snapshots use the static viewer: no live room, comments or writes.
   const preview = previewMode || archived;
-  const mobileLayout = useMobileEditor();
+  const mobileWindow = useMobileEditor();
+  const mobileLayout = mobileWindow || compact;
   const savedToolbarPlacement = useEditorToolbarPlacement(initialToolbarPlacement);
   const toolbarPlacement = mobileLayout ? "left" : savedToolbarPlacement;
   const [agents, setAgents] = useState<ThreadsWorkspaceProps | undefined>(() =>
@@ -721,6 +728,17 @@ export function FileEditor({
   const visibleError = error === PENDING_NAVIGATION_MESSAGE && !room.hasPendingEdits() ? "" : error;
   const pages = useMemo(() => documentPages(snapshot.content), [snapshot.content]);
   const currentPageId = pages.some((page) => page.id === activePageId) ? activePageId : pages[0].id;
+  const threadContextCallback = useRef(onThreadContextChange);
+  threadContextCallback.current = onThreadContextChange;
+  const contextSettled = useRef(room.whenSettled);
+  contextSettled.current = room.whenSettled;
+  useEffect(() => {
+    threadContextCallback.current?.({
+      pageId: currentPageId,
+      nodeIds: selectedIds.slice(0, 100),
+      whenSettled: () => contextSettled.current(),
+    });
+  }, [currentPageId, selectedIds]);
   const selectionVersion = useRef(0);
   useLayoutEffect(() => {
     selectionVersion.current++;
@@ -3980,6 +3998,7 @@ export function FileEditor({
         />
       )}
       {viewMenu}
+      {suppliedThreadControl}
     </div>
   );
   const threadControl = agents && (
@@ -4159,6 +4178,7 @@ export function FileEditor({
       nodes={renderedNodes}
       tokens={tokens}
       data-mobile-panels-open={mobilePanelsOpen}
+      data-compact={compact || undefined}
       className="tidy-editor editor-workspace relative flex h-full min-h-0 w-full overflow-hidden bg-surface text-primary-black"
     >
       {!preview && !local && (
@@ -5060,7 +5080,10 @@ export function FileEditor({
           )}
           <CanvasAlignment guides={snapGuides} spacing={spacingCues} view={view} />
           {!prototypeMode && (preview || local || !viewPreferences.comments) && (
-            <div data-canvas-control className="absolute right-4 top-20 z-30 md:top-4">
+            <div
+              data-canvas-control
+              className="canvas-main-controls absolute right-4 top-20 z-30 md:top-4"
+            >
               {canvasControls}
             </div>
           )}

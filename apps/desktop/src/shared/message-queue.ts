@@ -1,11 +1,15 @@
 import { z } from "zod";
 import { attachmentSchema, MAX_ATTACHMENTS } from "./attachments";
 
+import { designContextSchema } from "./design-context";
+
 export const MAX_QUEUED_MESSAGES = 20;
 const id = z.string().uuid();
 export const queuedMessageSchema = z.object({
   id,
   text: z.string().max(32_000),
+  designContext: designContextSchema.optional(),
+  designIds: z.array(id).max(20).optional(),
   attachments: z.array(attachmentSchema).max(MAX_ATTACHMENTS).optional(),
 });
 export type QueuedMessage = z.infer<typeof queuedMessageSchema>;

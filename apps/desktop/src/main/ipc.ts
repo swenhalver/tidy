@@ -5,6 +5,7 @@ import { trustedRendererURL } from "./renderer-security";
 import { readLocalFile } from "./local-files";
 import { createWorkspaceRequests } from "./workspace-requests";
 import type { AppUpdates } from "./app-updates";
+import { AppPreviews } from "./app-previews";
 
 /** Accept requests only from an app-owned window's main frame at the expected renderer URL. */
 function trustedRequest(event: IpcMainInvokeEvent, rendererURL: string) {
@@ -39,6 +40,7 @@ export function registerUpdateIPC(updates: AppUpdates, rendererURL: string) {
 
 /** Register validated workspace operations and forward events only to trusted app renderers. */
 export function registerWorkspaceIPC(service: WorkspaceService, rendererURL: string) {
+  const previews = new AppPreviews(rendererURL);
   const requests = createWorkspaceRequests<IpcMainInvokeEvent>(service, {
     async chooseProject(event) {
       const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, {
@@ -61,6 +63,8 @@ export function registerWorkspaceIPC(service: WorkspaceService, rendererURL: str
       };
     },
     openExternal: (url) => shell.openExternal(url),
+    setAppPreview: (event, input) =>
+      previews.set(BrowserWindow.fromWebContents(event.sender)!, input),
   });
   for (const name of requests.names) {
     ipcMain.handle(`tidy:${name}`, async (event, input: unknown) => {

@@ -24,6 +24,7 @@ const projectSnapshotSchema = z.object({
 });
 const attachedFileSchema = attachmentSchema.extend({ previewUrl: z.string().optional() });
 const responseSchemas = {
+  "set-app-preview": z.boolean(),
   bootstrap: z.object({
     projects: z.array(projectSchema),
     activeProject: projectSnapshotSchema.nullable(),

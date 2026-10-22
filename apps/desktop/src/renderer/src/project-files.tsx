@@ -8,6 +8,7 @@ import { Icon } from "@tidy/editor/components/ui/icon";
 import { FileCard, FileViewToggle } from "@tidy/editor/components/files/file-browser-ui";
 import { DocumentPreview } from "@tidy/editor/components/files/document-preview";
 import { filesGrid, filesHeader } from "@tidy/editor/components/workspace/page-layout";
+import { useDesign } from "./design-context";
 import type {
   DesktopAPI,
   DesignFolder,
@@ -16,52 +17,22 @@ import type {
   ProjectSnapshot,
 } from "../../shared/contracts";
 
-function LocalPreview({
-  api,
-  projectId,
-  file,
-}: {
-  api: DesktopAPI;
-  projectId: string;
-  file: DesignSummary;
-}) {
+function LocalPreview({ projectId, file }: { projectId: string; file: DesignSummary }) {
   const container = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
-  const [value, setValue] = useState<LocalDesign>();
-  const [error, setError] = useState(false);
+  const { value, error } = useDesign(projectId, file.id, visible);
   useEffect(() => {
     const element = container.current;
     if (!element) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting) {
-          setVisible(true);
-          observer.disconnect();
-        }
+        setVisible(entry.isIntersecting);
       },
       { rootMargin: "160px" },
     );
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  useEffect(() => {
-    if (!visible) return;
-    let current = true;
-    void api
-      .readDesign(projectId, file.id)
-      .then((value) => {
-        if (current) {
-          setValue(value);
-          setError(false);
-        }
-      })
-      .catch(() => {
-        if (current) setError(true);
-      });
-    return () => {
-      current = false;
-    };
-  }, [api, projectId, file.id, file.updatedAt, visible]);
   return (
     <div ref={container} className="local-file-preview" aria-hidden="true">
       {value ? (
@@ -79,6 +50,8 @@ export function ProjectFiles({
   snapshot,
   navigationTarget,
   onOpen,
+  onBrowse,
+  browsing = true,
   onCreated,
   onUpdate,
   onFolderUpdate,
@@ -87,6 +60,8 @@ export function ProjectFiles({
   snapshot: ProjectSnapshot;
   navigationTarget: HTMLElement | null;
   onOpen(id: string): void;
+  onBrowse?(): void;
+  browsing?: boolean;
   onCreated(file: LocalDesign): void;
   onUpdate(file: LocalDesign): void;
   onFolderUpdate(folder: DesignFolder): void;
@@ -125,6 +100,7 @@ export function ProjectFiles({
     return folder ? displayName(folder) : "Unfiled";
   }
   const openFolder = (id: string | null) => {
+    onBrowse?.();
     setFolderId(id);
     setError("");
     setEditing(null);
@@ -302,7 +278,7 @@ export function ProjectFiles({
     ) : (
       <span className="block truncate text-sm font-medium">{displayName(file)}</span>
     );
-    const preview = <LocalPreview api={api} projectId={projectId} file={file} />;
+    const preview = <LocalPreview projectId={projectId} file={file} />;
     return view === "grid" ? (
       <li key={file.id} className="relative local-file-card">
         <FileCard
@@ -363,9 +339,9 @@ export function ProjectFiles({
           </div>
         ) : (
           <Button
-            className={`sidebar-item design-folder-link ${activeFolderId === folder.id ? "selected" : ""}`}
+            className={`sidebar-item design-folder-link ${browsing && activeFolderId === folder.id ? "selected" : ""}`}
             aria-label={`Open folder ${displayName(folder)}`}
-            aria-current={activeFolderId === folder.id ? "page" : undefined}
+            aria-current={browsing && activeFolderId === folder.id ? "page" : undefined}
             title={displayName(folder)}
             onClick={() => openFolder(folder.id)}
           >
@@ -394,8 +370,8 @@ export function ProjectFiles({
         createPortal(
           <>
             <Button
-              className={`sidebar-item design-files-home ${!currentFolder ? "selected" : ""}`}
-              aria-current={!currentFolder ? "page" : undefined}
+              className={`sidebar-item design-files-home ${browsing && !currentFolder ? "selected" : ""}`}
+              aria-current={browsing && !currentFolder ? "page" : undefined}
               onClick={() => openFolder(null)}
             >
               <Icon name="folder" size={15} />

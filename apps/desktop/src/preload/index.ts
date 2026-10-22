@@ -16,6 +16,7 @@ async function request<Name extends WorkspaceOperation>(
 }
 
 const api: DesktopAPI = {
+  setAppPreview: (input) => request("set-app-preview", input),
   updateState: async () =>
     appUpdateStateSchema.parse(await ipcRenderer.invoke("tidy:update-state")),
   checkUpdates: async () => {

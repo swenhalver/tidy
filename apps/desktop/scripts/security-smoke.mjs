@@ -14,10 +14,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
 import { app, BrowserWindow } from "electron";
 
 // Synthetic projects and harnesses only. No developer credentials or model inference.
 const temporary = await mkdtemp(join(tmpdir(), "tidy-security-smoke-"));
+const previewServer = createServer((_request, response) => {
+  response.writeHead(200, { "Content-Type": "text/html" });
+  response.end(
+    '<!doctype html><button id="counter">0</button><script>let count=0;counter.onclick=()=>counter.textContent=String(++count)</script>',
+  );
+});
+await new Promise((resolve) => previewServer.listen(0, "127.0.0.1", resolve));
+const previewURL = `http://127.0.0.1:${previewServer.address().port}/`;
 const exportProbe = join(temporary, "native-svg.js");
 execFileSync(
   "bun",
@@ -105,7 +114,7 @@ app.on("browser-window-created", (_event, window) => {
       assert.equal(preferences.sandbox, true);
       assert.equal(preferences.webSecurity, true);
       assert.equal(preferences.webviewTag, false);
-      await wait("document.querySelector('#workspace-tab-code')!==null");
+      await wait("document.querySelector('[aria-label=\"Threads\"]')!==null");
       await wait("document.querySelector('[aria-label=\"New file options\"]')!==null");
       assert.equal(await evaluate("typeof require"), "undefined");
       assert.equal(await evaluate("typeof window.tidy.invoke"), "undefined");
@@ -288,8 +297,17 @@ app.on("browser-window-created", (_event, window) => {
         ),
         true,
       );
-      await evaluate("document.querySelector('#workspace-tab-code').click();true");
+      await evaluate(
+        "window.__connectedCanvas=document.querySelector('[aria-label=\"Design canvas\"]');document.querySelector('.file-thread-toggle').click();true",
+      );
       await wait("document.querySelector('#thread-prompt')!==null");
+      await wait("document.querySelector('.tidy-editor')?.dataset.compact==='true'");
+      assert.equal(
+        await evaluate(
+          "document.querySelector('.editor-panel[data-kind=\"layers\"]')===null || getComputedStyle(document.querySelector('.editor-panel[data-kind=\"layers\"]')).display==='none'",
+        ),
+        true,
+      );
       await wait("document.querySelector('[aria-label^=\"Model:\"]')?.disabled===false");
       assert.equal(
         await evaluate("document.querySelector('[aria-label^=\"Model:\"]').textContent"),
@@ -307,6 +325,9 @@ app.on("browser-window-created", (_event, window) => {
       const snapshot = await api("bootstrap");
       const threadId = snapshot.activeProject.threads[0].id;
       const live = await api("readThread", projectId, threadId);
+      assert.deepEqual(live.designIds, [design.id]);
+      assert.equal(live.messages[0].designContext.fileId, design.id);
+      assert.equal(live.messages[0].designContext.pageId, design.document.pages[0].id);
       await assert.rejects(
         api("respondToApproval", projectId, threadId, randomUUID(), "allow"),
         /no longer/,
@@ -326,6 +347,28 @@ app.on("browser-window-created", (_event, window) => {
       assert.equal(stored.pendingApprovals, undefined);
       assert.equal(stored.sessionId, undefined);
       assert.equal(stored.settings?.permissionMode, undefined);
+      // Enter through the thread, expand its live file, and return without remounting the canvas.
+      await evaluate("document.querySelector('.design-files-home').click();true");
+      await evaluate(
+        `document.querySelector('[data-thread-id="${threadId}"] .thread-select').click();true`,
+      );
+      await wait(
+        "document.querySelector('.working-design-preview')?.getBoundingClientRect().width>0",
+      );
+      await evaluate("document.querySelector('.working-file-heading button').click();true");
+      await wait("document.querySelector('.connected-workspace').dataset.view==='design'");
+      assert.equal(
+        await evaluate(
+          "window.__connectedCanvas===document.querySelector('[aria-label=\"Design canvas\"]')",
+        ),
+        true,
+      );
+      assert.equal(
+        await evaluate("document.querySelector('#thread-pane').getBoundingClientRect().width>0"),
+        true,
+      );
+      await evaluate("document.querySelector('[aria-label=\"Return to thread\"]').click();true");
+      await wait("document.querySelector('.connected-workspace').dataset.view==='thread'");
       const markup =
         '<img src="x" onerror="window.__injected=true"><script>window.__injected=true</script>';
       await wait("document.querySelector('[aria-label^=\"Model:\"]')?.disabled===false");
@@ -347,6 +390,57 @@ app.on("browser-window-created", (_event, window) => {
         true,
       );
       await wait("document.querySelector('[aria-label^=\"Model:\"]')?.disabled===false");
+      // The local app browser is isolated from Tidy's preload, session and native authority.
+      for (const url of [
+        "file:///etc/passwd",
+        "tidy://app/index.html",
+        "https://attacker.invalid/",
+      ])
+        await assert.rejects(
+          api("setAppPreview", {
+            visible: true,
+            url,
+            bounds: { x: 250, y: 80, width: 500, height: 300 },
+          }),
+          /Invalid desktop request/,
+        );
+      await api("setAppPreview", {
+        visible: true,
+        url: previewURL,
+        bounds: { x: 250, y: 80, width: 500, height: 300 },
+      });
+      const preview = window.contentView.children.find(
+        (child) => child.webContents && child.webContents !== page,
+      );
+      assert.ok(preview);
+      const previewPreferences = preview.webContents.getLastWebPreferences();
+      assert.equal(previewPreferences.nodeIntegration, false);
+      assert.equal(previewPreferences.contextIsolation, true);
+      assert.equal(previewPreferences.sandbox, true);
+      assert.equal(previewPreferences.preload, undefined);
+      assert.notEqual(preview.webContents.session, page.session);
+      assert.deepEqual(
+        await preview.webContents.executeJavaScript("[typeof require, typeof window.tidy]"),
+        ["undefined", "undefined"],
+      );
+      assert.equal(
+        await preview.webContents.executeJavaScript("counter.click();counter.textContent"),
+        "1",
+      );
+      await api("setAppPreview", {
+        visible: true,
+        url: previewURL,
+        bounds: { x: 250, y: 80, width: 450, height: 300 },
+      });
+      assert.equal(await preview.webContents.executeJavaScript("counter.textContent"), "1");
+      const beforePreviewPopup = BrowserWindow.getAllWindows().length;
+      await preview.webContents.executeJavaScript("window.open('https://attacker.invalid/');true");
+      assert.equal(BrowserWindow.getAllWindows().length, beforePreviewPopup);
+      await preview.webContents.executeJavaScript("location.href='https://attacker.invalid/';true");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(preview.webContents.getURL(), previewURL);
+      await api("setAppPreview", { visible: false });
+      assert.equal(preview.getVisible(), false);
       const popupCount = BrowserWindow.getAllWindows().length;
       await evaluate("window.open('https://attacker.invalid/');true");
       assert.equal(BrowserWindow.getAllWindows().length, popupCount);
@@ -355,7 +449,7 @@ app.on("browser-window-created", (_event, window) => {
       assert.equal(page.getURL(), "tidy://app/index.html");
       foreign.destroy();
       console.info(
-        "PASS: sandbox, protocol resources, canvas, native SVG export injection rejection, IPC authorization and validation, event confidentiality, model controls, Enter to send, native approvals, replay rejection, private runtime state, navigation and popup denial.",
+        "PASS: sandbox, protocol resources, connected canvas/thread round trip, isolated interactive local app previews, native SVG export injection rejection, IPC authorization and validation, event confidentiality, model controls, Enter to send, native approvals, replay rejection, private runtime state, navigation and popup denial.",
       );
       clearTimeout(deadline);
       result = 0;
@@ -371,6 +465,7 @@ app.on("browser-window-created", (_event, window) => {
 app.on("will-quit", (event) => {
   event.preventDefault();
   clearTimeout(deadline);
+  previewServer.close();
   void rm(temporary, { recursive: true, force: true }).finally(() => app.exit(result));
 });
 await import("../out/main/index.js");

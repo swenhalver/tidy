@@ -6,11 +6,14 @@ import { harnessSettingsSchema } from "../shared/harness-settings";
 import { checkHarnesses } from "./harnesses";
 import { WorkspaceService } from "./workspace-service";
 import { messageDeliverySchema, queueRequestSchema } from "../shared/message-queue";
+import { designContextSchema } from "../shared/contracts";
+import { appPreviewSchema, type AppPreviewRequest } from "../shared/app-preview";
 
 export type WorkspacePlatform<Context> = {
   chooseProject(context: Context): Promise<string | null>;
   chooseDesign(context: Context): Promise<{ name: string; document: unknown } | null>;
   openExternal(url: string): Promise<void>;
+  setAppPreview?(context: Context, input: AppPreviewRequest): Promise<boolean>;
 };
 
 export function createWorkspaceRequests<Context>(
@@ -38,6 +41,11 @@ export function createWorkspaceRequests<Context>(
       threads: service.withLiveThreads(snapshot.project.id, snapshot.threads),
     };
   }
+  handle(
+    "set-app-preview",
+    appPreviewSchema,
+    (input, context) => platform.setAppPreview?.(context, input) ?? false,
+  );
   handle("bootstrap", z.undefined(), async () => {
     let activeProject = null;
     if (store.activeProjectId) {
@@ -107,6 +115,7 @@ export function createWorkspaceRequests<Context>(
         prompt: z.string().trim().max(32_000),
         attachmentIds: z.array(uuid).max(MAX_ATTACHMENTS).optional(),
         designIds: z.array(uuid).max(20),
+        designContext: designContextSchema.optional(),
         settings: harnessSettingsSchema.optional(),
       })
       .strict(),
@@ -121,6 +130,8 @@ export function createWorkspaceRequests<Context>(
         threadId: uuid,
         messageId: uuid.optional(),
         text: z.string().trim().max(32_000),
+        designContext: designContextSchema.optional(),
+        designIds: z.array(uuid).max(20).optional(),
         attachmentIds: z.array(uuid).max(MAX_ATTACHMENTS).optional(),
       })
       .strict(),
@@ -199,7 +210,11 @@ export function createWorkspaceRequests<Context>(
         folderId: uuid.nullable().optional(),
       })
       .strict(),
-    (value) => store.updateDesign(value),
+    async (value) => {
+      const design = await store.updateDesign(value);
+      void service.refreshDesigns(value.projectId).catch(() => {});
+      return design;
+    },
   );
   handle(
     "upload-design-asset",

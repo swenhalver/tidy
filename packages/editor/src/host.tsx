@@ -32,6 +32,11 @@ export type ThumbnailProps = {
   getSnapshot: () => { revision: number; content: DesignDocument };
 };
 export type EditorAgentSetup = { resourceUrl: string; organizationId: string };
+export type EditorThreadContext = {
+  pageId: string;
+  nodeIds: string[];
+  whenSettled(): Promise<void>;
+};
 export type EditorHost = {
   AgentConnection?: ComponentType<{ setup: EditorAgentSetup; open: boolean }>;
   Link: ComponentType<EditorLinkProps>;

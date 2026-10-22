@@ -55,6 +55,7 @@ function remember<T extends ProjectSnapshot | null>(snapshot: T): T {
 }
 
 const api: DesktopAPI = {
+  setAppPreview: (input) => request("set-app-preview", input),
   updateState: async () => ({ status: "unsupported" }),
   checkUpdates: async () => {},
   installUpdate: async () => {

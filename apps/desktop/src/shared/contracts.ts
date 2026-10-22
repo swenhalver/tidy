@@ -1,3 +1,4 @@
+import { designContextSchema, type DesignContext } from "./design-context";
 import { z } from "zod";
 import { attachmentSchema, type AttachedFile } from "./attachments";
 import { toolActivitySchema, MAX_TOOL_ACTIVITIES } from "./tool-activity";
@@ -16,6 +17,7 @@ import {
   type MessageDelivery,
   type QueueRequest,
 } from "./message-queue";
+import type { AppPreviewRequest } from "./app-preview";
 
 const id = z.string().uuid();
 export const harnessIdSchema = z.enum(["codex", "claude"]);
@@ -42,13 +44,17 @@ export const designSchema = z.object({
   updatedAt: z.string(),
   folderId: z.string().uuid().nullable().optional(),
   nodeCount: z.number().optional(),
+  version: z.string().optional(),
 });
+
+export { designContextSchema, type DesignContext } from "./design-context";
 
 const messageSchema = z.object({
   id,
   role: z.enum(["user", "assistant"]),
   text: z.string().max(1_000_000),
   attachments: z.array(attachmentSchema).max(10).optional(),
+  designContext: designContextSchema.optional(),
 });
 export const storedThreadSchema = z.object({
   revision: z.number().int().min(0).default(0),
@@ -141,6 +147,7 @@ export type Bootstrap = {
 };
 export type DesktopEvent = z.infer<typeof desktopEventSchema>;
 export type DesktopAPI = {
+  setAppPreview(input: AppPreviewRequest): Promise<boolean>;
   updateState(): Promise<AppUpdateState>;
   checkUpdates(): Promise<void>;
   installUpdate(): Promise<void>;
@@ -166,6 +173,7 @@ export type DesktopAPI = {
     designIds: string[];
     settings?: HarnessSettings;
     attachmentIds?: string[];
+    designContext?: DesignContext;
   }): Promise<Thread>;
   sendMessage(input: {
     delivery?: MessageDelivery;
@@ -174,6 +182,8 @@ export type DesktopAPI = {
     threadId: string;
     text: string;
     attachmentIds?: string[];
+    designContext?: DesignContext;
+    designIds?: string[];
   }): Promise<Thread>;
   updateMessageQueue(input: QueueRequest): Promise<Thread>;
   addAttachment(projectId: string, name: string, dataUrl: string): Promise<AttachedFile>;

@@ -1,8 +1,22 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type Ref,
+  type ReactNode,
+} from "react";
 import { FileEditor } from "@tidy/editor";
-import { EditorHostProvider } from "@tidy/editor/host";
+import { EditorHostProvider, type EditorThreadContext } from "@tidy/editor/host";
 import type { DesignDocument } from "@tidy/design/document";
-import type { DesktopAPI, LocalDesign } from "../../shared/contracts";
+import type { DesignContext, DesktopAPI, LocalDesign } from "../../shared/contracts";
+
+import { useDesign, useDesignRepository } from "./design-context";
+import { showToast } from "@tidy/ui/toast";
+
+export type LocalCanvasHandle = { captureContext(): Promise<DesignContext | undefined> };
 
 export const LocalCanvas = memo(function LocalCanvas({
   api,
@@ -11,6 +25,11 @@ export const LocalCanvas = memo(function LocalCanvas({
   active,
   onBack,
   onUpdate,
+  ref,
+  threadControl,
+  onContextChange,
+  backLabel,
+  compact,
 }: {
   api: DesktopAPI;
   projectId: string;
@@ -18,71 +37,59 @@ export const LocalCanvas = memo(function LocalCanvas({
   active: boolean;
   onBack(): void;
   onUpdate(design: LocalDesign): void;
+  ref?: Ref<LocalCanvasHandle>;
+  threadControl?: ReactNode;
+  onContextChange?(context: { fileId: string; pageId: string; nodeIds: string[] }): void;
+  backLabel: string;
+  compact?: boolean;
 }) {
   const file = useRef(initial);
   const revision = useRef(0);
   const pending = useRef(0);
-  const writes = useRef(Promise.resolve());
-  const refreshWanted = useRef(false);
-  const refreshEpoch = useRef(0);
+  const repository = useDesignRepository();
+  const accepted = useDesign(projectId, initial.id);
+  const threadContext = useRef<EditorThreadContext | undefined>(undefined);
   const [assets, setAssets] = useState(initial.assets);
   const [external, setExternal] = useState<{ revision: number; content: DesignDocument }>();
   const notify = useRef(onUpdate);
   notify.current = onUpdate;
-  const refresh = useCallback(async () => {
-    refreshWanted.current = true;
-    if (pending.current) return;
-    refreshWanted.current = false;
-    const epoch = ++refreshEpoch.current;
-    const value = await api.readDesign(projectId, initial.id);
-    if (pending.current || epoch !== refreshEpoch.current) {
-      refreshWanted.current = true;
-      return;
-    }
-    if (value.version === file.current.version) return;
+  const sync = useCallback(() => {
+    const value = repository.get(projectId, initial.id).value;
+    if (!value || pending.current || value.version === file.current.version) return;
     file.current = value;
     setAssets(value.assets);
     setExternal({ revision: ++revision.current, content: value.document });
-    notify.current(value);
-  }, [api, projectId, initial.id]);
+  }, [repository, projectId, initial.id]);
+  useEffect(sync, [sync, accepted.value]);
   useEffect(() => {
-    void refresh().catch(console.error);
-    return api.onEvent((event) => {
-      if (
-        event.type === "designs" &&
-        event.projectId === projectId &&
-        event.designs.some(
-          (design) => design.id === initial.id && design.updatedAt !== file.current.updatedAt,
-        )
-      )
-        void refresh().catch(console.error);
-    });
-  }, [api, projectId, initial.id, refresh]);
+    if (accepted.error) showToast(accepted.error, "error");
+  }, [accepted.error]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      async captureContext() {
+        const context = threadContext.current;
+        if (!context) return undefined;
+        const { pageId, nodeIds } = context;
+        await context.whenSettled();
+        const current = await repository.load(projectId, initial.id);
+        return { fileId: initial.id, pageId, nodeIds, version: current.version };
+      },
+    }),
+    [repository, projectId, initial.id],
+  );
 
   async function update(changes: { document?: DesignDocument; name?: string }) {
     pending.current++;
-    refreshEpoch.current++;
-    const write = writes.current.then(async () => {
-      const value = await api.updateDesign({
-        projectId,
-        designId: initial.id,
-        expectedVersion: file.current.version,
-        ...changes,
-      });
+    try {
+      const value = await repository.update(projectId, initial.id, changes, file.current.version);
       file.current = value;
       setAssets(value.assets);
       revision.current++;
       notify.current(value);
-    });
-    writes.current = write.catch(() => {});
-    try {
-      await write;
-    } catch (error) {
-      refreshWanted.current = true;
-      throw error;
     } finally {
       pending.current--;
-      if (refreshWanted.current) void refresh().catch(console.error);
+      sync();
     }
   }
 
@@ -93,7 +100,7 @@ export const LocalCanvas = memo(function LocalCanvas({
           return (
             <button
               className={className}
-              aria-label="Back to designs"
+              aria-label={backLabel}
               onClick={() => {
                 let blocked = false;
                 onNavigate?.({
@@ -112,12 +119,22 @@ export const LocalCanvas = memo(function LocalCanvas({
     >
       <FileEditor
         fileId={initial.id}
-        fileName={initial.name}
+        fileName={accepted.value?.name ?? initial.name}
         organizationName=""
         backHref="#"
         initialDocument={{ revision: 0, content: initial.document }}
+        threadControl={threadControl}
+        onThreadContextChange={(context) => {
+          threadContext.current = context;
+          onContextChange?.({
+            fileId: initial.id,
+            pageId: context.pageId,
+            nodeIds: context.nodeIds,
+          });
+        }}
         initialPanelsOpen
         local
+        compact={compact}
         active={active}
         previewAssetUrls={assets}
         externalDocument={external}
@@ -129,7 +146,7 @@ export const LocalCanvas = memo(function LocalCanvas({
                 .split("/")
                 .at(-1)
                 ?.replace(/\.json$/, "") ?? source;
-            const value = await api.readDesign(projectId, id);
+            const value = await repository.load(projectId, id);
             setAssets((current) => ({ ...current, ...value.assets }));
             return {
               fileUid: value.id,

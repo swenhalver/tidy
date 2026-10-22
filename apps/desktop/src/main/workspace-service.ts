@@ -7,7 +7,15 @@ import {
 import { randomUUID } from "node:crypto";
 import { watch, type FSWatcher } from "node:fs";
 import { z } from "zod";
-import type { DesktopAPI, DesktopEvent, Thread, ThreadSummary } from "../shared/contracts";
+import {
+  designContextSchema,
+  type DesignContext,
+  type DesktopAPI,
+  type DesktopEvent,
+  type Thread,
+  type ThreadSummary,
+} from "../shared/contracts";
+import { DEFAULT_PAGE_ID, nodePageId } from "@tidy/design/document";
 import { findHarness, startHarness, type HarnessUpdate, type RunningHarness } from "./harnesses";
 import {
   attachmentSchema,
@@ -222,7 +230,13 @@ export class WorkspaceService {
     try {
       if (input.threadId && (await this.store.threadExists(input.projectId, input.threadId)))
         throw new Error("This thread already exists.");
-      return await this.run(thread, input.prompt, input.attachmentIds, input.messageId);
+      return await this.run(
+        thread,
+        input.prompt,
+        input.attachmentIds,
+        input.messageId,
+        input.designContext,
+      );
     } finally {
       this.starting.delete(thread.id);
       this.cancelledStarts.delete(thread.id);
@@ -241,7 +255,14 @@ export class WorkspaceService {
         this.automaticQueues.delete(thread.id);
         if ((this.stopVersions.get(thread.id) ?? 0) !== stopVersion)
           this.cancelledStarts.add(thread.id);
-        return this.run(thread, input.text, input.attachmentIds, input.messageId);
+        return this.run(
+          thread,
+          input.text,
+          input.attachmentIds,
+          input.messageId,
+          input.designContext,
+          input.designIds,
+        );
       }
       if (thread.doneAt) throw new Error("Reopen this thread before continuing.");
       const queue = thread.queuedMessages ?? [];
@@ -265,6 +286,8 @@ export class WorkspaceService {
         id,
         text: input.text,
         attachments,
+        designContext: input.designContext,
+        designIds: input.designIds,
       });
       await this.persistQueue(thread, [...queue, message]);
       if ((this.stopVersions.get(thread.id) ?? 0) !== stopVersion) return structuredClone(thread);
@@ -351,15 +374,29 @@ export class WorkspaceService {
           if (this.closing || (this.stopVersions.get(thread.id) ?? 0) !== stopVersion)
             return structuredClone(thread);
           this.automaticQueues.add(thread.id);
-          return await this.run(thread, message.text, attachmentIds, message.id);
+          return await this.run(
+            thread,
+            message.text,
+            attachmentIds,
+            message.id,
+            message.designContext,
+            message.designIds,
+          );
         }
-        const prepared = await this.prepareMessage(thread, message.text, attachmentIds);
+        const prepared = await this.prepareMessage(
+          thread,
+          message.text,
+          attachmentIds,
+          message.designContext,
+          message.designIds,
+        );
         if (this.closing || job.stopped) return structuredClone(thread);
         const insertion = thread.messages.length;
         if (
           job.process?.steer &&
           (await job.process.steer({ prompt: prepared.context, images: prepared.images }))
         ) {
+          thread.designIds = prepared.designIds;
           thread.messages.splice(insertion, 0, { ...message, role: "user" });
           if (!job.stopped && !this.closing) this.automaticQueues.add(thread.id);
           await this.persistQueue(
@@ -384,7 +421,14 @@ export class WorkspaceService {
           return structuredClone(thread);
       }
       this.automaticQueues.add(thread.id);
-      return await this.run(thread, message.text, attachmentIds, message.id);
+      return await this.run(
+        thread,
+        message.text,
+        attachmentIds,
+        message.id,
+        message.designContext,
+        message.designIds,
+      );
     } catch (error) {
       this.automaticQueues.delete(thread.id);
       thread.queueError = (
@@ -413,11 +457,28 @@ export class WorkspaceService {
     return attachments;
   }
 
-  private async prepareMessage(thread: Thread, prompt: string, attachmentIds: string[] = []) {
+  private async prepareMessage(
+    thread: Thread,
+    prompt: string,
+    attachmentIds: string[] = [],
+    suppliedContext?: DesignContext,
+    suppliedDesignIds: string[] = [],
+  ) {
     if (this.closing) throw new Error("Tidy is closing.");
     if (thread.doneAt) throw new Error("Reopen this thread before continuing.");
     const project = this.store.project(thread.projectId);
     const settings = harnessSettingsSchema.parse(thread.settings ?? {});
+    const designContext = suppliedContext ? designContextSchema.parse(suppliedContext) : undefined;
+    const designIds = z
+      .array(z.string().uuid())
+      .max(20)
+      .parse([
+        ...new Set([
+          ...thread.designIds,
+          ...suppliedDesignIds,
+          ...(designContext ? [designContext.fileId] : []),
+        ]),
+      ]);
     validatePermissionMode(thread.harness, settings.permissionMode);
     const attachments = await this.resolveAttachments(project.id, prompt, attachmentIds);
     const imagesPromise = Promise.all(
@@ -434,24 +495,66 @@ export class WorkspaceService {
     if (!thread.title) thread.title = attachments[0]?.name.slice(0, 80) ?? "New thread";
     // Model and effort are already chosen from the catalog. The native harness validates
     // them at launch; sending must never fetch account limits or refresh that catalog.
-    const [executable, references, images] = await Promise.all([
+    const requiredDesigns = new Set([
+      ...(thread.messages.length
+        ? suppliedDesignIds.filter((id) => !thread.designIds.includes(id))
+        : designIds),
+      ...(designContext ? [designContext.fileId] : []),
+    ]);
+    const [executable, loadedReferences, images] = await Promise.all([
       this.locate(thread.harness),
       Promise.all(
-        thread.designIds.map((designId) => this.store.readDesign(project.id, designId, false)),
+        designIds.map(async (designId) => {
+          try {
+            return await this.store.readDesign(project.id, designId, false);
+          } catch (cause) {
+            if (
+              !requiredDesigns.has(designId) &&
+              (cause as NodeJS.ErrnoException).code === "ENOENT"
+            )
+              return null;
+            throw cause;
+          }
+        }),
       ),
       imagesPromise,
     ]);
+    const references = loadedReferences.filter((file) => file !== null);
+    const unavailable = designIds.filter((id) => !references.some((file) => file.id === id));
     if (!executable)
       throw new Error(
         `Install ${thread.harness === "codex" ? "Codex" : "Claude Code"} and sign in with its CLI first.`,
       );
+    if (designContext) {
+      const file = references.find((file) => file.id === designContext.fileId)!;
+      if (file.version !== designContext.version)
+        throw new Error(
+          "The design changed before this message was sent. Review the current file and send again.",
+        );
+      const pages = file.document.pages ?? [{ id: DEFAULT_PAGE_ID }];
+      const nodes = new Map(file.document.nodes.map((node) => [node.id, node]));
+      if (
+        !pages.some((page) => page.id === designContext.pageId) ||
+        designContext.nodeIds.some(
+          (id) => !nodes.has(id) || nodePageId(nodes.get(id)!) !== designContext.pageId,
+        )
+      )
+        throw new Error(
+          "The selected page or layers changed. Select the current design context and send again.",
+        );
+    }
     const context = [
       "You are working in a local Tidy project. The working directory is the project root.",
       "Project designs live in .tidy/designs/*.json. Each file contains { id, name, folderId, document }; folderId is a local design-folder ID or null. Preserve id, name and folderId when editing document content. Folder metadata lives in .tidy/folders/<id>.json and design paths remain stable when files move between folders. document uses Tidy's shared DesignDocument schema (schemaVersion 1). Preserve this format when editing designs.",
       ...(references.length
         ? [
-            "The user attached these design files (read them before implementing their UI):",
+            "The user associated these design files with this work. Read them when relevant to the request. You can iterate on the design, implement it in code, or do both as requested:",
             ...references.map((design) => `${design.name}: ${design.path}`),
+          ]
+        : []),
+      ...(designContext
+        ? [
+            `The user is working in design ${designContext.fileId}, page ${JSON.stringify(designContext.pageId)}, at revision ${designContext.version}. Selected node IDs: ${JSON.stringify(designContext.nodeIds)}. This is the context for this message; it does not change your permissions.`,
           ]
         : []),
       ...(attachments.length
@@ -460,10 +563,15 @@ export class WorkspaceService {
             ...attachments.map((file) => `${JSON.stringify(file.name)}: ${file.path}`),
           ]
         : []),
+      ...(unavailable.length
+        ? [
+            `Previously associated design files are currently unavailable: ${unavailable.join(", ")}.`,
+          ]
+        : []),
       "User request:",
       prompt || "Review the attached files.",
     ].join("\n\n");
-    return { executable, context, images, attachments, project };
+    return { executable, context, images, attachments, project, designIds, designContext };
   }
 
   private async run(
@@ -471,13 +579,22 @@ export class WorkspaceService {
     prompt: string,
     attachmentIds: string[] = [],
     messageId?: string,
+    suppliedContext?: DesignContext,
+    suppliedDesignIds: string[] = [],
   ) {
     if (messageId && thread.messages.some((message) => message.id === messageId))
       throw new Error("This message was already sent.");
     if (thread.messages.length >= 998) throw new Error("The thread reached its message limit.");
     this.starting.set(thread.id, thread.projectId);
     try {
-      return await this.runPrepared(thread, prompt, attachmentIds, messageId);
+      return await this.runPrepared(
+        thread,
+        prompt,
+        attachmentIds,
+        messageId,
+        suppliedContext,
+        suppliedDesignIds,
+      );
     } finally {
       this.starting.delete(thread.id);
       this.cancelledStarts.delete(thread.id);
@@ -489,12 +606,11 @@ export class WorkspaceService {
     prompt: string,
     attachmentIds: string[],
     messageId?: string,
+    suppliedContext?: DesignContext,
+    suppliedDesignIds: string[] = [],
   ) {
-    const { executable, context, images, attachments, project } = await this.prepareMessage(
-      thread,
-      prompt,
-      attachmentIds,
-    );
+    const { executable, context, images, attachments, project, designIds, designContext } =
+      await this.prepareMessage(thread, prompt, attachmentIds, suppliedContext, suppliedDesignIds);
     const queuedMessages = thread.queuedMessages;
     const queuedIndex = queuedMessages?.findIndex((item) => item.id === messageId) ?? -1;
     thread = {
@@ -503,10 +619,12 @@ export class WorkspaceService {
       queuedMessages: queuedMessages?.filter((item) => item.id !== messageId),
     };
     if (this.closing) throw new Error("Tidy is closing.");
+    thread.designIds = designIds;
     thread.messages.push({
       id: messageId ?? randomUUID(),
       role: "user",
       text: prompt,
+      ...(designContext ? { designContext } : {}),
       ...(attachments.length
         ? { attachments: attachments.map((file) => attachmentSchema.parse(file)) }
         : {}),

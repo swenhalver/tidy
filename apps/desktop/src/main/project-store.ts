@@ -477,6 +477,7 @@ export class ProjectStore {
             nodeCount: design.document.nodes.length,
             path: design.path,
             updatedAt: design.updatedAt,
+            version: design.version,
           };
         } catch {
           return null;

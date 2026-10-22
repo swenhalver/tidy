@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { DesktopAPI, Thread } from "../../shared/contracts";
+import type { DesignContext, DesktopAPI, Thread } from "../../shared/contracts";
 import {
   applyQueueAction,
   type MessageDelivery,
@@ -92,12 +92,20 @@ export function useMessageQueue({
         } else await immediate;
       });
     },
-    enqueue(message: QueuedMessage, delivery: MessageDelivery) {
+    enqueue(
+      message: QueuedMessage,
+      delivery: MessageDelivery,
+      captureContext?: () => Promise<DesignContext | undefined>,
+    ) {
       if (!api || !thread) return;
+      const context = captureContext?.();
+      void context?.catch(() => {});
       submit(
         { kind: "enqueue", message },
-        () =>
+        async () =>
           api.sendMessage({
+            designContext: await context,
+            designIds: message.designIds,
             projectId: thread.projectId,
             threadId: thread.id,
             messageId: message.id,

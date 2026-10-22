@@ -29,6 +29,7 @@ export function CanvasColorPicker({
   children,
   className,
   "data-mobile-panels-open": mobilePanelsOpen,
+  "data-compact": compact,
 }: {
   canvas: RefObject<HTMLDivElement | null>;
   nodes: DesignNode[];
@@ -36,6 +37,7 @@ export function CanvasColorPicker({
   children: ReactNode;
   className: string;
   "data-mobile-panels-open": boolean;
+  "data-compact"?: boolean;
 }) {
   const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const [request, setRequest] = useState<Request | null>(null);
@@ -145,6 +147,7 @@ export function CanvasColorPicker({
       <main
         className={className}
         data-mobile-panels-open={mobilePanelsOpen}
+        data-compact={compact}
         data-picking-canvas-color={request ? "" : undefined}
       >
         {children}

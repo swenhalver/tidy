@@ -32,6 +32,28 @@ projects and harness configurations you trust.
   responses are rejected. Stopping, completion and shutdown invalidate pending
   requests. Unsupported interactive requests fail closed.
 
+## Local app previews
+
+The thread's Preview app action accepts only explicit HTTP(S) loopback URLs, with
+credentials, file URLs, Tidy resources and remote hosts rejected. A development
+preview cannot load the Tidy renderer's own origin. The native request is validated
+through the same trusted main-frame IPC boundary as other desktop operations.
+
+Each workspace window has at most one preview `WebContentsView`, with no preload,
+Node integration or webviews. It uses sandboxing, context isolation, web security
+and a separate nonpersistent browser session. Permissions, downloads and new windows
+are denied. Navigations, redirects and subframes are restricted to its selected
+local origin. The preview cannot receive Tidy's event broadcasts or call desktop APIs.
+App renderer CSP and navigation restrictions remain unchanged. Local apps can still
+execute their own JavaScript and make their own network requests, as in a browser.
+
+Native bounds are clipped to the workspace window. The renderer hides the preview
+when switching surfaces or opening a dialog/popover, and the native host hides it
+on renderer navigation or failure. Closing the workspace explicitly closes the
+preview's web contents, following Electron's [view lifecycle guidance](https://www.electronjs.org/docs/latest/api/base-window#resource-management).
+Browser development returns an unsupported result and offers a separate browser link
+instead of embedding an authenticated local application in the Tidy document.
+
 ## Portable data and private authority
 
 Designs, folders, asset records, transcripts and tool logs live under the project's
