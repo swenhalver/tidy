@@ -5,10 +5,10 @@ import { showToast, dismissToast } from "@tidy/ui/toast";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Button } from "@tidy/ui/button";
 import { SelectMenu } from "@tidy/ui/select-menu";
-import { TidyLogo } from "@tidy/ui/tidy-logo";
 import { Icon } from "@tidy/editor/components/ui/icon";
 import { LocalCanvas } from "./local-canvas";
 import { DesktopShell } from "./desktop-shell";
+import { Settings } from "./settings";
 import { Conversation } from "./conversation";
 import { ThreadSidebar, type ThreadOrderControls } from "./thread-sidebar";
 import { ApprovalRequests } from "./approval-requests";
@@ -28,6 +28,9 @@ import { MessageActionIcon } from "./message-action-icon";
 import { useMessageQueue } from "./use-message-queue";
 import { MAX_QUEUED_MESSAGES, type MessageDelivery } from "../../shared/message-queue";
 import { AppUpdate } from "./app-update";
+import { useCloud } from "./use-cloud";
+import { CloudWorkspace } from "./cloud-workspace";
+import { SyncStatus } from "./sync-status";
 import type { HarnessDetails, HarnessSettings } from "../../shared/harness-settings";
 import { summarizeThread, applyThreadPatch, applyProjectEvent } from "../../shared/thread-updates";
 import type {
@@ -61,6 +64,44 @@ const errorText = (error: unknown) =>
 
 export function App() {
   const api = window.tidy;
+  const cloud = useCloud(api?.cloud);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsTrigger = useRef<HTMLButtonElement>(null);
+  const settingsWasOpen = useRef(false);
+  useEffect(() => {
+    if (settingsWasOpen.current && !settingsOpen) settingsTrigger.current?.focus();
+    settingsWasOpen.current = settingsOpen;
+  }, [settingsOpen]);
+  const [location, setLocation] = useState<"local" | "cloud">("local");
+  const [cloudOrganizationId, setCloudOrganizationId] = useState("");
+  const [cloudCanvas, setCloudCanvas] = useState(false);
+  const cloudAccount = useRef<string | undefined>(undefined);
+  const navigation = useRef(0);
+  useEffect(() => {
+    if (!cloud.state?.signedIn) {
+      cloudAccount.current = undefined;
+      setLocation("local");
+      setCloudOrganizationId("");
+      return;
+    }
+    if (!cloud.account) return;
+    if (cloudAccount.current === cloud.account.id) {
+      if (
+        cloudOrganizationId &&
+        !cloud.account.organizations.some((o) => o.id === cloudOrganizationId && o.canEdit)
+      ) {
+        setCloudOrganizationId(cloud.account.organizations.find((o) => o.canEdit)?.id ?? "");
+        setLocation("local");
+      }
+      return;
+    }
+    cloudAccount.current = cloud.account.id;
+    const organization = cloud.account.organizations.find((o) => o.canEdit);
+    if (organization) {
+      setCloudOrganizationId(organization.id);
+      if (navigation.current === 0) setLocation("cloud");
+    }
+  }, [cloud.state?.signedIn, cloud.account, cloudOrganizationId]);
   const [mode, setMode] = useState<Mode>("design");
   const [designNavigation, setDesignNavigation] = useState<HTMLElement | null>(null);
   const [loading, setLoading] = useState(true);
@@ -108,7 +149,6 @@ export function App() {
     projectId?: string;
     text: string;
   } | null>(null);
-  const navigation = useRef(0);
   const threadSelection = useRef<Record<string, number>>({});
   const snapshot = activeProjectId ? snapshots[activeProjectId] : undefined;
   const project = snapshot?.project;
@@ -427,9 +467,9 @@ export function App() {
       .bootstrap()
       .then((value) => {
         if (!mounted) return;
-        setProjects(value.projects);
+        setProjects(value.projects.filter((p) => !p.cloud));
         setHarnesses(value.harnesses);
-        if (value.activeProject) {
+        if (value.activeProject && !value.activeProject.project.cloud) {
           const snapshot = [...initialEvents.values()].reduce(
             applyProjectEvent,
             value.activeProject,
@@ -504,9 +544,12 @@ export function App() {
     setError(null);
     try {
       const value = projectId ? await api.selectProject(projectId) : await api.openProject();
-      if (value && navigation.current === generation) applySnapshot(value);
+      if (value && navigation.current === generation) {
+        applySnapshot(value);
+        setLocation("local");
+      }
     } catch (value) {
-      setError({ text: errorText(value), original: value });
+      if (navigation.current === generation) setError({ text: errorText(value), original: value });
     } finally {
       if (navigation.current === generation) setOpening(false);
     }
@@ -968,7 +1011,34 @@ export function App() {
         key={project.id}
         api={api}
         snapshot={designSnapshot}
-        navigationTarget={designNavigation}
+        navigationTarget={location === "local" ? designNavigation : null}
+        cloud={
+          api.cloud && cloud.account
+            ? {
+                organizations: cloud.account.organizations.filter((o) => o.canEdit),
+                connected:
+                  cloud.state?.bindings
+                    .filter((b) => b.projectId === project.id)
+                    .map((b) => b.designId) ?? [],
+                statuses: Object.fromEntries(
+                  (cloud.state?.bindings ?? [])
+                    .filter((b) => b.projectId === project.id)
+                    .map((b) => [
+                      b.designId,
+                      b.status === "synced"
+                        ? "Synced"
+                        : b.status === "syncing"
+                          ? "Syncing…"
+                          : b.status === "offline"
+                            ? "Saved locally"
+                            : "Sync needs attention",
+                    ]),
+                ),
+                publish: (designId, organizationId) =>
+                  api.cloud!.connectLocal(project.id, designId, organizationId),
+              }
+            : undefined
+        }
         onOpen={(id) => setSelectedDesigns((current) => ({ ...current, [project.id]: id }))}
         onCreated={(value) => {
           updateLocalDesign(value);
@@ -992,31 +1062,65 @@ export function App() {
         }
       />
     );
-  }, [api, designSnapshot, designNavigation, updateLocalDesign]);
+  }, [
+    api,
+    designSnapshot,
+    designNavigation,
+    updateLocalDesign,
+    location,
+    cloud.account,
+    cloud.state,
+  ]);
+
+  const canvasFocused = location === "cloud" ? cloudCanvas : mode === "design" && Boolean(design);
 
   return (
-    <DesktopShell canvasFocused={mode === "design" && Boolean(design)}>
-      <aside id="desktop-navigation" className="desktop-navigation" aria-label="Project workspace">
+    <DesktopShell canvasFocused={!settingsOpen && canvasFocused} settingsOpen={settingsOpen}>
+      <aside
+        id="desktop-navigation"
+        className="desktop-navigation"
+        aria-label="Project workspace"
+        hidden={settingsOpen}
+      >
         <header className="workspace-header">
           <div className="project-picker" title={project?.name}>
-            {project && (
+            {(project || cloud.account) && (
               <SelectMenu
-                value={project.id}
+                value={location === "cloud" ? `cloud:${cloudOrganizationId}` : (project?.id ?? "")}
                 options={[
+                  ...(cloud.account?.organizations
+                    .filter((o) => o.canEdit)
+                    .map((o) => ({
+                      value: `cloud:${o.id}`,
+                      label: o.name,
+                      description: "Cloud workspace",
+                    })) ?? []),
                   ...projects.map((item) => ({
                     value: item.id,
                     label: item.name,
+                    description: "On this computer",
                   })),
                   { value: "open", label: "Open project…" },
                 ]}
-                label="Project"
+                label="Workspace"
                 disabled={opening}
-                onChange={(value) => void chooseProject(value === "open" ? undefined : value)}
+                onChange={(value) => {
+                  if (value.startsWith("cloud:")) {
+                    navigation.current++;
+                    setCloudOrganizationId(value.slice(6));
+                    setLocation("cloud");
+                  } else void chooseProject(value === "open" ? undefined : value);
+                }}
                 triggerClassName="project-trigger"
               />
             )}
           </div>
-          <div role="tablist" aria-label="Workspace" className="workspace-tabs">
+          <div
+            role="tablist"
+            aria-label="Workspace"
+            className="workspace-tabs"
+            hidden={location === "cloud"}
+          >
             {modes.map((item, index) => (
               <Button
                 key={item.id}
@@ -1055,7 +1159,7 @@ export function App() {
         </header>
         {project && snapshot && (
           <>
-            <div className="sidebar-mode-content" hidden={mode !== "code"}>
+            <div className="sidebar-mode-content" hidden={location === "cloud" || mode !== "code"}>
               <ThreadSidebar
                 key={project.id}
                 projectId={project.id}
@@ -1064,391 +1168,453 @@ export function App() {
                 renderThread={renderThread}
               />
             </div>
-            <nav
-              ref={setDesignNavigation}
-              className="design-navigation"
-              aria-label="Design folders"
-              hidden={mode !== "design"}
-            />
           </>
         )}
-        <AppUpdate api={api} />
+        <nav
+          ref={setDesignNavigation}
+          className="design-navigation"
+          aria-label="Design folders"
+          hidden={location === "local" && mode !== "design"}
+        />
+        <div className="sidebar-footer">
+          <Button
+            ref={settingsTrigger}
+            className="settings-trigger"
+            aria-label="Settings"
+            title="Settings"
+            onClick={() => {
+              navigation.current++;
+              setOpening(false);
+              setSettingsOpen(true);
+            }}
+          >
+            <Icon name="settings" size={18} />
+          </Button>
+          <AppUpdate api={api} />
+        </div>
       </aside>
-      <main className="workspace">
-        {!project ? (
-          <div className="project-home">
-            <h1 aria-label="Tidy">
-              <TidyLogo className="tidy-logo" />
-            </h1>
-            {loading ? (
-              <p>Opening workspace…</p>
-            ) : api ? (
-              <>
-                <p>Designs and engineering threads, together in your project.</p>
-                <Button
-                  className="primary-button"
-                  disabled={opening}
-                  onClick={() => void chooseProject()}
-                >
-                  {opening ? "Opening…" : "Open project"}
-                </Button>
-                {projects.length > 0 && (
-                  <div className="recent-projects">
-                    {projects.map((item) => (
-                      <Button
-                        key={item.id}
-                        className="recent-project"
-                        disabled={opening}
-                        onClick={() => void chooseProject(item.id)}
-                      >
-                        <span>{item.name}</span>
-                        <small>{item.path}</small>
-                      </Button>
-                    ))}
-                  </div>
-                )}
-              </>
-            ) : (
-              <p>Open Tidy desktop to work with local projects.</p>
-            )}
+      <main className="workspace" hidden={settingsOpen}>
+        {api && cloud.state?.signedIn && cloudOrganizationId && (
+          <div className="workspace-view" hidden={location !== "cloud"}>
+            <CloudWorkspace
+              api={api}
+              cloud={cloud}
+              organizationId={cloudOrganizationId}
+              navigationTarget={location === "cloud" ? designNavigation : null}
+              active={!settingsOpen && location === "cloud"}
+              onCanvasChange={setCloudCanvas}
+            />
           </div>
-        ) : (
-          <>
-            <section
-              id="workspace-panel-design"
-              role="tabpanel"
-              aria-labelledby="workspace-tab-design"
-              hidden={mode !== "design"}
-              className="project-workspace canvas-open"
-            >
-              <div className="design-workspace">
-                {design && (
-                  <LocalCanvas
-                    key={design.id}
-                    api={api!}
-                    projectId={project.id}
-                    initial={design}
-                    active={mode === "design"}
-                    onBack={backToFiles}
-                    onUpdate={updateLocalDesign}
-                  />
-                )}
-                {api && (
-                  <div className="project-files-container" hidden={Boolean(design)}>
-                    {projectFiles}
-                  </div>
-                )}
-              </div>
-            </section>
-            <section
-              id="workspace-panel-code"
-              role="tabpanel"
-              aria-labelledby="workspace-tab-code"
-              hidden={mode !== "code"}
-              className="project-workspace"
-            >
-              <div className="thread-workspace">
-                <div className="content-heading">
-                  <h1>{thread?.title ?? (selectedThreadId ? "Opening thread…" : "New thread")}</h1>
-                  {thread?.doneAt && (
-                    <Button
-                      className="quiet-button thread-heading-action"
-                      disabled={running || Boolean(updatingDone[thread.id])}
-                      onClick={() => void toggleThreadDone(summarizeThread(thread))}
-                    >
-                      Reopen thread
-                    </Button>
+        )}
+        <div className="workspace-view" hidden={location !== "local"}>
+          {!project ? (
+            <div className="project-home">
+              <h1>Tidy</h1>
+              {loading ? (
+                <p>Opening workspace…</p>
+              ) : api ? (
+                <>
+                  <p>Designs and engineering threads, together in your project.</p>
+                  <Button
+                    className="primary-button"
+                    disabled={opening}
+                    onClick={() => void chooseProject()}
+                  >
+                    {opening ? "Opening…" : "Open project"}
+                  </Button>
+                  {projects.length > 0 && (
+                    <div className="recent-projects">
+                      {projects.map((item) => (
+                        <Button
+                          key={item.id}
+                          className="recent-project"
+                          disabled={opening}
+                          onClick={() => void chooseProject(item.id)}
+                        >
+                          <span>{item.name}</span>
+                          <small>{item.path}</small>
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p>Open Tidy desktop to work with local projects.</p>
+              )}
+            </div>
+          ) : (
+            <>
+              <section
+                id="workspace-panel-design"
+                role="tabpanel"
+                aria-labelledby="workspace-tab-design"
+                hidden={mode !== "design"}
+                className="project-workspace canvas-open"
+              >
+                <div className="design-workspace">
+                  {design && (
+                    <LocalCanvas
+                      key={design.id}
+                      api={api!}
+                      projectId={project.id}
+                      initial={design}
+                      active={!settingsOpen && location === "local" && mode === "design"}
+                      onBack={backToFiles}
+                      onUpdate={updateLocalDesign}
+                      status={
+                        <SyncStatus
+                          api={api?.cloud}
+                          state={cloud.state}
+                          projectId={project.id}
+                          designId={design.id}
+                          onKeepBoth={async () => {
+                            const binding = cloud.state?.bindings.find(
+                              (b) => b.projectId === project.id && b.designId === design.id,
+                            );
+                            if (!api?.cloud || !binding?.organizationId)
+                              throw new Error("Reconnect this design to resolve its conflict.");
+                            const value = await api.cloud.keepBoth(
+                              binding.organizationId,
+                              project.id,
+                              design.id,
+                            );
+                            updateLocalDesign(value.design);
+                            setSelectedDesigns((current) => ({
+                              ...current,
+                              [project.id]: value.design.id,
+                            }));
+                          }}
+                        />
+                      }
+                    />
+                  )}
+                  {api && (
+                    <div className="project-files-container" hidden={Boolean(design)}>
+                      {projectFiles}
+                    </div>
                   )}
                 </div>
-                <Conversation
-                  key={`${project.id}:${selectedThreadId ?? "draft"}`}
-                  identity={`${project.id}:${selectedThreadId ?? "draft"}`}
-                  thread={thread}
-                  active={mode === "code"}
-                  api={api!}
-                  references={
-                    thread?.designIds.map(
-                      (id) =>
-                        snapshot.designs.find((design) => design.id === id)?.name ??
-                        "Design reference",
-                    ) ?? []
-                  }
-                />
-                {thread?.pendingApprovals?.length && api ? (
-                  <ApprovalRequests
-                    key={thread.id}
-                    requests={thread.pendingApprovals}
-                    onRespond={async (id, decision) => {
-                      const value = await api.respondToApproval(
-                        project.id,
-                        thread.id,
-                        id,
-                        decision,
-                      );
-                      setThreads((current) => ({
-                        ...current,
-                        [value.id]:
-                          (current[value.id]?.revision ?? -1) > value.revision
-                            ? current[value.id]
-                            : value,
-                      }));
-                    }}
-                  />
-                ) : null}
-                {thread && (
-                  <MessageQueue
-                    key={`queue:${thread.id}`}
-                    messages={queue.messages}
-                    running={running}
-                    error={thread.queueError}
-                    onChange={queue.change}
-                    onRecover={queue.recover}
-                  />
-                )}
-                <form
-                  className="composer"
-                  onDragOver={(event) => {
-                    if (event.dataTransfer.types.includes("Files") && !thread?.doneAt)
-                      event.preventDefault();
-                  }}
-                  onDrop={(event) => {
-                    if (event.dataTransfer.files.length) {
-                      event.preventDefault();
-                      attachFiles(Array.from(event.dataTransfer.files));
-                    }
-                  }}
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void send();
-                  }}
-                >
-                  {!thread && snapshot.designs.length > 0 && (
-                    <DesignReferences
-                      designs={snapshot.designs}
-                      selected={draft.designIds}
-                      onChange={(designIds) => updateDraft({ designIds })}
-                    />
-                  )}
-                  <AttachmentList
-                    files={draft.attachments ?? []}
-                    onRemove={
-                      thread?.doneAt
-                        ? undefined
-                        : (id) =>
-                            updateDraft({
-                              attachments: draft.attachments?.filter((file) => file.id !== id),
-                            })
-                    }
-                  />
-                  {Boolean(uploading[draftKey]) && (
-                    <span className="attachment-progress" role="status">
-                      Adding attachments…
-                    </span>
-                  )}
-                  <input
-                    ref={fileInput}
-                    type="file"
-                    multiple
-                    hidden
-                    aria-label="Attach files"
-                    onChange={(event) => {
-                      attachFiles(Array.from(event.currentTarget.files ?? []));
-                      event.currentTarget.value = "";
-                    }}
-                  />
-                  <label className="sr-only" htmlFor="thread-prompt">
-                    Message
-                  </label>
-                  <SkillPrompt
-                    key={draftKey + selectedHarness}
-                    skills={availableSkills}
-                    status={skillCatalog.key === detailKey ? skillCatalog.status : "loading"}
-                    retry={() => {
-                      void loadSkills(true);
-                    }}
-                    id="thread-prompt"
-                    value={draft.text}
-                    onChange={(text) => {
-                      const name = skillCommand(text)?.name;
-                      const skill = availableSkills.find((skill) => skill.name === name);
-                      updateDraft({
-                        text,
-                        skill: skill
-                          ? { id: skill.id, name: skill.name, harness: selectedHarness }
-                          : draft.skill?.name === name
-                            ? draft.skill
-                            : undefined,
-                      });
-                    }}
-                    onPaste={(event) => {
-                      const files = Array.from(event.clipboardData.files);
-                      if (files.length) {
-                        event.preventDefault();
-                        attachFiles(files);
-                      }
-                    }}
-                    placeholder={
-                      thread?.doneAt
-                        ? "Reopen this thread to continue…"
-                        : running
-                          ? "Queue a follow-up, or send it now…"
-                          : thread
-                            ? "Continue this thread… / for skills"
-                            : "What would you like to work on? / for skills"
-                    }
-                    disabled={Boolean(thread?.doneAt) || busy}
-                    maxLength={32_000}
-                    rows={2}
-                    onKeyDown={(event) => {
-                      if (
-                        event.key === "Enter" &&
-                        event.shiftKey &&
-                        (event.metaKey || event.ctrlKey) &&
-                        running &&
-                        !event.nativeEvent.isComposing
-                      ) {
-                        event.preventDefault();
-                        const first = queue.messages[0];
-                        if (first && !event.repeat)
-                          queue.change({ kind: "steer", messageId: first.id });
-                        return;
-                      }
-                      if (
-                        event.key === "Enter" &&
-                        !event.shiftKey &&
-                        !event.altKey &&
-                        !event.nativeEvent.isComposing &&
-                        event.nativeEvent.keyCode !== 229
-                      ) {
-                        event.preventDefault();
-                        if (!event.repeat)
-                          void send(event.metaKey || event.ctrlKey ? "steer" : "queue");
-                      }
-                    }}
-                  />
-                  <div className="composer-actions">
-                    <Button
-                      type="button"
-                      className="quiet-button attachment-button"
-                      aria-label="Attach files"
-                      title="Attach files"
-                      disabled={Boolean(thread?.doneAt) || busy}
-                      onClick={() => fileInput.current?.click()}
-                    >
-                      <svg
-                        aria-hidden="true"
-                        width="17"
-                        height="17"
-                        viewBox="0 0 24 24"
-                        fill="none"
+              </section>
+              <section
+                id="workspace-panel-code"
+                role="tabpanel"
+                aria-labelledby="workspace-tab-code"
+                hidden={mode !== "code"}
+                className="project-workspace"
+              >
+                <div className="thread-workspace">
+                  <div className="content-heading">
+                    <h1>
+                      {thread?.title ?? (selectedThreadId ? "Opening thread…" : "New thread")}
+                    </h1>
+                    {thread?.doneAt && (
+                      <Button
+                        className="quiet-button thread-heading-action"
+                        disabled={running || Boolean(updatingDone[thread.id])}
+                        onClick={() => void toggleThreadDone(summarizeThread(thread))}
                       >
-                        <path
-                          d="m8 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </Button>
-                    <HarnessControls
-                      api={api!}
-                      connections={harnesses}
-                      harness={selectedHarness}
-                      settings={thread?.settings ?? draft.settings ?? {}}
-                      actualModel={thread?.actualModel}
-                      usage={thread?.usage}
-                      details={currentDetails?.info}
-                      error={currentDetails?.error}
-                      loading={Boolean(currentDetails?.loading)}
-                      disabled={Boolean(
-                        running || busy || (thread && settingsPending[thread.id]) || thread?.doneAt,
-                      )}
-                      onHarnessChange={
-                        thread ? undefined : (harness) => updateDraft({ harness, settings: {} })
-                      }
-                      onSettingsChange={(settings) => void changeSettings(settings)}
-                      onRefresh={() => {
-                        if (project && harnessReady)
-                          void loadHarnessDetails(project.id, selectedHarness, true);
+                        Reopen thread
+                      </Button>
+                    )}
+                  </div>
+                  <Conversation
+                    key={`${project.id}:${selectedThreadId ?? "draft"}`}
+                    identity={`${project.id}:${selectedThreadId ?? "draft"}`}
+                    thread={thread}
+                    active={location === "local" && mode === "code"}
+                    api={api!}
+                    references={
+                      thread?.designIds.map(
+                        (id) =>
+                          snapshot.designs.find((design) => design.id === id)?.name ??
+                          "Design reference",
+                      ) ?? []
+                    }
+                  />
+                  {thread?.pendingApprovals?.length && api ? (
+                    <ApprovalRequests
+                      key={thread.id}
+                      requests={thread.pendingApprovals}
+                      onRespond={async (id, decision) => {
+                        const value = await api.respondToApproval(
+                          project.id,
+                          thread.id,
+                          id,
+                          decision,
+                        );
+                        setThreads((current) => ({
+                          ...current,
+                          [value.id]:
+                            (current[value.id]?.revision ?? -1) > value.revision
+                              ? current[value.id]
+                              : value,
+                        }));
                       }}
                     />
-                    <span className="composer-spacer" />
-                    <div className="composer-delivery">
-                      {running && !hasMessage ? (
-                        <Button
-                          type="button"
-                          className="composer-submit composer-stop"
-                          aria-label={
-                            queue.stopping || thread?.activity === "Stopping" ? "Stopping…" : "Stop"
-                          }
-                          title={
-                            queue.stopping || thread?.activity === "Stopping" ? "Stopping…" : "Stop"
-                          }
-                          disabled={queue.stopping || thread?.activity === "Stopping"}
-                          onClick={() => queue.stop()}
-                        >
-                          <MessageActionIcon action="stop" />
-                        </Button>
-                      ) : (
-                        <>
-                          {running && (
-                            <Button
-                              type="button"
-                              className="quiet-button composer-steer"
-                              disabled={!canSend}
-                              title="Use this instruction now (Ctrl/⌘ Enter)"
-                              onClick={() => void send("steer")}
-                            >
-                              <MessageActionIcon action="steer" />
-                              Send now
-                            </Button>
-                          )}
-                          <Button
-                            type="submit"
-                            className="composer-submit"
-                            disabled={!canSend}
-                            aria-label={submitLabel}
-                            title={`${submitLabel} (Enter)`}
-                          >
-                            {busy ? (
-                              <Icon name="more" size={16} />
-                            ) : (
-                              <MessageActionIcon
-                                action={running || queue.messages.length ? "queue" : "send"}
-                              />
-                            )}
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  {!harnessReady && (
-                    <div className="connection-help">
-                      <span>
-                        {harnesses.find((item) => item.id === selectedHarness)?.name ??
-                          "Your harness"}{" "}
-                        needs to be installed and signed in locally. Run{" "}
-                        <code>
-                          {selectedHarness === "codex" ? "codex login" : "claude auth login"}
-                        </code>{" "}
-                        in your terminal.
+                  ) : null}
+                  {thread && (
+                    <MessageQueue
+                      key={`queue:${thread.id}`}
+                      messages={queue.messages}
+                      running={running}
+                      error={thread.queueError}
+                      onChange={queue.change}
+                      onRecover={queue.recover}
+                    />
+                  )}
+                  <form
+                    className="composer"
+                    onDragOver={(event) => {
+                      if (event.dataTransfer.types.includes("Files") && !thread?.doneAt)
+                        event.preventDefault();
+                    }}
+                    onDrop={(event) => {
+                      if (event.dataTransfer.files.length) {
+                        event.preventDefault();
+                        attachFiles(Array.from(event.dataTransfer.files));
+                      }
+                    }}
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void send();
+                    }}
+                  >
+                    {!thread && snapshot.designs.length > 0 && (
+                      <DesignReferences
+                        designs={snapshot.designs}
+                        selected={draft.designIds}
+                        onChange={(designIds) => updateDraft({ designIds })}
+                      />
+                    )}
+                    <AttachmentList
+                      files={draft.attachments ?? []}
+                      onRemove={
+                        thread?.doneAt
+                          ? undefined
+                          : (id) =>
+                              updateDraft({
+                                attachments: draft.attachments?.filter((file) => file.id !== id),
+                              })
+                      }
+                    />
+                    {Boolean(uploading[draftKey]) && (
+                      <span className="attachment-progress" role="status">
+                        Adding attachments…
                       </span>
+                    )}
+                    <input
+                      ref={fileInput}
+                      type="file"
+                      multiple
+                      hidden
+                      aria-label="Attach files"
+                      onChange={(event) => {
+                        attachFiles(Array.from(event.currentTarget.files ?? []));
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                    <label className="sr-only" htmlFor="thread-prompt">
+                      Message
+                    </label>
+                    <SkillPrompt
+                      key={draftKey + selectedHarness}
+                      skills={availableSkills}
+                      status={skillCatalog.key === detailKey ? skillCatalog.status : "loading"}
+                      retry={() => {
+                        void loadSkills(true);
+                      }}
+                      id="thread-prompt"
+                      value={draft.text}
+                      onChange={(text) => {
+                        const name = skillCommand(text)?.name;
+                        const skill = availableSkills.find((skill) => skill.name === name);
+                        updateDraft({
+                          text,
+                          skill: skill
+                            ? { id: skill.id, name: skill.name, harness: selectedHarness }
+                            : draft.skill?.name === name
+                              ? draft.skill
+                              : undefined,
+                        });
+                      }}
+                      onPaste={(event) => {
+                        const files = Array.from(event.clipboardData.files);
+                        if (files.length) {
+                          event.preventDefault();
+                          attachFiles(files);
+                        }
+                      }}
+                      placeholder={
+                        thread?.doneAt
+                          ? "Reopen this thread to continue…"
+                          : running
+                            ? "Queue a follow-up, or send it now…"
+                            : thread
+                              ? "Continue this thread… / for skills"
+                              : "What would you like to work on? / for skills"
+                      }
+                      disabled={Boolean(thread?.doneAt) || busy}
+                      maxLength={32_000}
+                      rows={2}
+                      onKeyDown={(event) => {
+                        if (
+                          event.key === "Enter" &&
+                          event.shiftKey &&
+                          (event.metaKey || event.ctrlKey) &&
+                          running &&
+                          !event.nativeEvent.isComposing
+                        ) {
+                          event.preventDefault();
+                          const first = queue.messages[0];
+                          if (first && !event.repeat)
+                            queue.change({ kind: "steer", messageId: first.id });
+                          return;
+                        }
+                        if (
+                          event.key === "Enter" &&
+                          !event.shiftKey &&
+                          !event.altKey &&
+                          !event.nativeEvent.isComposing &&
+                          event.nativeEvent.keyCode !== 229
+                        ) {
+                          event.preventDefault();
+                          if (!event.repeat)
+                            void send(event.metaKey || event.ctrlKey ? "steer" : "queue");
+                        }
+                      }}
+                    />
+                    <div className="composer-actions">
                       <Button
                         type="button"
-                        className="quiet-button"
-                        onClick={() => void refreshHarnesses()}
+                        className="quiet-button attachment-button"
+                        aria-label="Attach files"
+                        title="Attach files"
+                        disabled={Boolean(thread?.doneAt) || busy}
+                        onClick={() => fileInput.current?.click()}
                       >
-                        Check connection
+                        <svg
+                          aria-hidden="true"
+                          width="17"
+                          height="17"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                        >
+                          <path
+                            d="m8 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
                       </Button>
+                      <HarnessControls
+                        api={api!}
+                        connections={harnesses}
+                        harness={selectedHarness}
+                        settings={thread?.settings ?? draft.settings ?? {}}
+                        actualModel={thread?.actualModel}
+                        usage={thread?.usage}
+                        details={currentDetails?.info}
+                        error={currentDetails?.error}
+                        loading={Boolean(currentDetails?.loading)}
+                        disabled={Boolean(
+                          running ||
+                          busy ||
+                          (thread && settingsPending[thread.id]) ||
+                          thread?.doneAt,
+                        )}
+                        onHarnessChange={
+                          thread ? undefined : (harness) => updateDraft({ harness, settings: {} })
+                        }
+                        onSettingsChange={(settings) => void changeSettings(settings)}
+                        onRefresh={() => {
+                          if (project && harnessReady)
+                            void loadHarnessDetails(project.id, selectedHarness, true);
+                        }}
+                      />
+                      <span className="composer-spacer" />
+                      <div className="composer-delivery">
+                        {running && !hasMessage ? (
+                          <Button
+                            type="button"
+                            className="composer-submit composer-stop"
+                            aria-label={
+                              queue.stopping || thread?.activity === "Stopping"
+                                ? "Stopping…"
+                                : "Stop"
+                            }
+                            title={
+                              queue.stopping || thread?.activity === "Stopping"
+                                ? "Stopping…"
+                                : "Stop"
+                            }
+                            disabled={queue.stopping || thread?.activity === "Stopping"}
+                            onClick={() => queue.stop()}
+                          >
+                            <MessageActionIcon action="stop" />
+                          </Button>
+                        ) : (
+                          <>
+                            {running && (
+                              <Button
+                                type="button"
+                                className="quiet-button composer-steer"
+                                disabled={!canSend}
+                                title="Use this instruction now (Ctrl/⌘ Enter)"
+                                onClick={() => void send("steer")}
+                              >
+                                <MessageActionIcon action="steer" />
+                                Send now
+                              </Button>
+                            )}
+                            <Button
+                              type="submit"
+                              className="composer-submit"
+                              disabled={!canSend}
+                              aria-label={submitLabel}
+                              title={`${submitLabel} (Enter)`}
+                            >
+                              {busy ? (
+                                <Icon name="more" size={16} />
+                              ) : (
+                                <MessageActionIcon
+                                  action={running || queue.messages.length ? "queue" : "send"}
+                                />
+                              )}
+                            </Button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  )}
-                </form>
-              </div>
-            </section>
-          </>
-        )}
+                    {!harnessReady && (
+                      <div className="connection-help">
+                        <span>
+                          {harnesses.find((item) => item.id === selectedHarness)?.name ??
+                            "Your harness"}{" "}
+                          needs to be installed and signed in locally. Run{" "}
+                          <code>
+                            {selectedHarness === "codex" ? "codex login" : "claude auth login"}
+                          </code>{" "}
+                          in your terminal.
+                        </span>
+                        <Button
+                          type="button"
+                          className="quiet-button"
+                          onClick={() => void refreshHarnesses()}
+                        >
+                          Check connection
+                        </Button>
+                      </div>
+                    )}
+                  </form>
+                </div>
+              </section>
+            </>
+          )}
+        </div>
       </main>
+      {settingsOpen && <Settings cloud={cloud} onBack={() => setSettingsOpen(false)} />}
     </DesktopShell>
   );
 }

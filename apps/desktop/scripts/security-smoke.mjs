@@ -110,6 +110,11 @@ app.on("browser-window-created", (_event, window) => {
       await wait("document.querySelector('[aria-label=\"New file options\"]')!==null");
       assert.equal(await evaluate("typeof require"), "undefined");
       assert.equal(await evaluate("typeof window.tidy.invoke"), "undefined");
+      assert.equal(await evaluate("typeof window.tidy.cloud.state"), "function");
+      assert.equal(
+        await evaluate("'accessToken' in window.tidy.cloud || 'refreshToken' in window.tidy.cloud"),
+        false,
+      );
       assert.deepEqual(await api("updateState"), { status: "unsupported" });
       await assert.rejects(api("installUpdate"), /No desktop update is ready/);
       const exported = await evaluate(
@@ -173,6 +178,20 @@ app.on("browser-window-created", (_event, window) => {
         "install-update",
         "harness-updates",
         "install-harness-update",
+        "cloud-state",
+        "cloud-sign-in",
+        "cloud-sign-out",
+        "cloud-account",
+        "cloud-files",
+        "cloud-open",
+        "cloud-connect",
+        "cloud-disconnect",
+        "cloud-catalog",
+        "cloud-open-file",
+        "cloud-create-file",
+        "cloud-focus",
+        "cloud-keep-both",
+        "cloud-thumbnail",
       ]) {
         const message = await foreign.webContents.executeJavaScript(
           `window.probe.invoke(${JSON.stringify(name)}).then(()=>null,error=>error.message)`,

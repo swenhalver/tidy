@@ -7,6 +7,87 @@ import { createWorkspaceRequests } from "./workspace-requests";
 import type { AppUpdates } from "./app-updates";
 import type { HarnessUpdates } from "./harness-updates";
 import { updatableHarnessIdSchema } from "../shared/harness-updates";
+import { z } from "zod";
+import {
+  cloudAccountSchema,
+  cloudFilesSchema,
+  cloudStateSchema,
+  cloudCatalogSchema,
+  cloudOpenedSchema,
+  cloudThumbnailSchema,
+  type CloudAPI,
+} from "../shared/cloud-sync";
+
+/** Native cloud actions have their own main-frame boundary; no tokens cross IPC. */
+export function registerCloudIPC(cloud: CloudAPI, rendererURL: string) {
+  function endpoint<I extends unknown[], O>(
+    input: z.ZodType<I>,
+    output: z.ZodType<O>,
+    run: (...args: NoInfer<I>) => Promise<O>,
+  ) {
+    return async (args: unknown[]) => output.parse(await run(...input.parse(args)));
+  }
+  const org = z.string().min(1).max(120);
+  const actions = {
+    thumbnail: endpoint(
+      z.tuple([z.uuid(), z.string().max(120)]),
+      cloudThumbnailSchema,
+      (file, version) => cloud.thumbnail(file, version),
+    ),
+    state: endpoint(z.tuple([]), cloudStateSchema, () => cloud.state()),
+    "sign-in": endpoint(z.tuple([]), z.void(), () => cloud.signIn()),
+    "sign-out": endpoint(z.tuple([]), z.void(), () => cloud.signOut()),
+    account: endpoint(z.tuple([z.boolean().optional()]), cloudAccountSchema, (cached?: boolean) =>
+      cloud.account(cached),
+    ),
+    catalog: endpoint(
+      z.tuple([org, z.boolean().optional()]),
+      cloudCatalogSchema,
+      (id: string, cached?: boolean) => cloud.catalog(id, cached),
+    ),
+    "open-file": endpoint(z.tuple([org, z.uuid()]), cloudOpenedSchema, (id, file) =>
+      cloud.openFile(id, file),
+    ),
+    "create-file": endpoint(z.tuple([org]), cloudOpenedSchema, (id) => cloud.createFile(id)),
+    "keep-both": endpoint(
+      z.tuple([org, z.uuid(), z.uuid()]),
+      cloudOpenedSchema,
+      (organization, project, design) => cloud.keepBoth(organization, project, design),
+    ),
+    focus: endpoint(
+      z.tuple([z.uuid().optional(), z.uuid().optional()]),
+      z.void(),
+      (projectId?: string, designId?: string) => cloud.focus(projectId, designId),
+    ),
+    files: endpoint(z.tuple([org]), cloudFilesSchema, (id) => cloud.files(id)),
+    open: endpoint(
+      z.tuple([z.uuid(), z.uuid(), z.string().min(1).max(120)]),
+      z.void(),
+      (project, file, name) => cloud.open(project, file, name),
+    ),
+    disconnect: endpoint(z.tuple([z.uuid(), z.uuid()]), z.void(), (project, design) =>
+      cloud.disconnect(project, design),
+    ),
+    connect: endpoint(
+      z.tuple([z.uuid(), z.uuid(), org]),
+      z.void(),
+      (project, design, organization) => cloud.connectLocal(project, design, organization),
+    ),
+  };
+  for (const [name, invoke] of Object.entries(actions))
+    ipcMain.handle(`tidy:cloud-${name}`, async (event, ...args: unknown[]) => {
+      if (!trustedRequest(event, rendererURL)) throw new Error("Untrusted desktop request.");
+      return invoke(args);
+    });
+  return cloud.onState((state) => {
+    for (const window of BrowserWindow.getAllWindows())
+      if (
+        !window.isDestroyed() &&
+        trustedRendererURL(window.webContents.mainFrame.url, rendererURL)
+      )
+        window.webContents.send("tidy:cloud-state", state);
+  });
+}
 
 /** Accept requests only from an app-owned window's main frame at the expected renderer URL. */
 function trustedRequest(event: IpcMainInvokeEvent, rendererURL: string) {

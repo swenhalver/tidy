@@ -18,6 +18,7 @@ import {
   type QueueRequest,
 } from "./message-queue";
 import type { HarnessUpdateState, UpdatableHarnessId } from "./harness-updates";
+import type { CloudAPI } from "./cloud-sync";
 
 const id = z.string().uuid();
 export const harnessIdSchema = z.enum(["codex", "claude"]);
@@ -31,6 +32,7 @@ export const projectSchema = z.object({
   name: z.string(),
   path: z.string(),
   openedAt: z.string(),
+  cloud: z.boolean().optional(),
 });
 export const folderSchema = z.object({
   id: z.string().uuid(),
@@ -150,6 +152,7 @@ export type DesktopAPI = {
   harnessUpdates(): Promise<HarnessUpdateState[]>;
   installHarnessUpdate(id: UpdatableHarnessId): Promise<void>;
   onHarnessUpdates(listener: (state: HarnessUpdateState[]) => void): () => void;
+  cloud?: CloudAPI;
   updateState(): Promise<AppUpdateState>;
   checkUpdates(): Promise<void>;
   installUpdate(): Promise<void>;

@@ -15,6 +15,86 @@ Design selected initially. Both views stay mounted while switching, and each pro
 retains its selected thread, design and composer drafts during the app session.
 The tabs support arrow keys, Home and End.
 
+## Optional cloud sync
+
+Open the **Settings** gear at the bottom of the sidebar, then choose **Sign in**
+under Account. Sign-in opens the system browser and requests a separate desktop
+authorization. Settings has its own sidebar; **Back to app** returns to the same
+workspace without resetting its state. Choose a cloud workspace from the workspace
+switcher to browse its files, folders, search, and lightweight previews. Workspaces
+currently require editing access. Account sign-in and sign-out live only in Settings.
+
+Open a file to download it and start editing. Downloads happen in private,
+account-scoped application storage without choosing a project directory. Cached
+files reopen from disk; file lists stay visible during background refreshes.
+**New file** opens locally immediately and publishes in the background. The canvas
+status shows whether work is synced, stored locally while offline, or needs attention.
+
+Signing in never uploads a local project. To publish an existing local design,
+choose **Add to workspace…** in its file actions and choose the destination. Its
+local path stays unchanged. Connected documents, images, and file names sync both
+ways; threads, attachments, repository files, and local folder moves remain local.
+
+Local saves never await network requests. The main-process coordinator batches
+work over 250 ms with a one-second maximum wait, uses a separate worker for document
+comparisons and local-file decoding, sends patches, and limits transfers to two designs
+at once. Active and locally changed files take priority, with capacity reserved so a
+slow background transfer cannot block the open design. Images
+upload before patches and reuse the server's content-hash deduplication. Sync
+baselines, asset aliases, initial file-creation IDs and unacknowledged operations
+persist in private application data. Restart reconciliation also discovers edits
+made by agents while the app was closed. Local asset IDs represent immutable
+images; replacing an image requires a new asset ID, as editor uploads already do.
+
+Incoming changes use a single bounded revision manifest for up to 1,000 downloaded
+files, checked every two seconds while editing, every fifteen seconds while browsing,
+and every minute when the app is in the background. Only changed designs fetch
+incremental patches, with snapshot fallback when server history has expired.
+Returning to the app or reconnecting triggers catch-up immediately. Unchanged
+files skip document decoding and comparison; metadata fingerprints detect edits
+on disk even if an external writer restores the modification time. A lightweight
+minute scan recovers missed filesystem events. Validated documents are cached
+privately with a bound of eight full documents and 1,000 summaries.
+Transient failures retry with bounded backoff, and Retry-After pauses account-wide
+requests instead of letting individual files overwhelm the service. File-list metadata
+refreshes in the background every thirty seconds while the cloud workspace is open.
+Thumbnails load only near the visible viewport, with at most three transfers at
+once and one cached image per file. Browsing files does not download every document.
+
+Conflicting edits or names preserve both versions and pause automatic sync. Open
+the canvas status and choose **Keep both copies** to retain the local edits as a
+separately synced cloud file and open the current cloud version. File renames use
+an expected-name check and durable pending state so retries cannot overwrite a
+concurrent rename or clear newer local changes.
+
+Signing out stops account-bound transfers and removes local tokens. Server
+revocation is attempted; an offline sign-out cannot guarantee remote revocation
+until the server is reachable. Signing back into the same account resumes its
+files; another account or a copied project path cannot inherit upload authority.
+
+Refresh tokens are protected using Electron `safeStorage`, outside projects and the
+renderer. Cloud login is unavailable when protected storage is unavailable,
+including Linux's `basic_text` fallback. Tokens have a dedicated `/api/desktop`
+audience and `desktop:sync` scope, and the API rechecks current OAuth consent,
+session, verified account and workspace membership. The existing database and R2
+services enforce document, asset, quota and role limits. No database credentials
+are shipped to desktop and no schema migration is needed for this increment.
+
+To test against a local or self-hosted web app running this branch:
+
+```sh
+TIDY_CLOUD_URL=http://localhost:3000 bun dev:desktop
+```
+
+The default service origin is `https://app.tidydesign.co`; self-hosted services must
+use HTTPS, with HTTP permitted for loopback development. The browser-only desktop
+development gateway does not expose native cloud credentials or login. Both web
+and desktop code must be running this implementation before cloud sync is usable.
+No deployment happens during development or tests.
+
+Live push notifications, project folder/name/deletion sync, automatic three-way
+merges and large-document latency measurements remain follow-up work.
+
 ## Projects and threads
 
 1. Open a project directory, or choose a recent project from the top-left picker.
@@ -24,7 +104,7 @@ The tabs support arrow keys, Home and End.
    the browser header. New files belong to the selected folder. File menus support
    renaming and moving. Documents use the same editor as web and persist edits
    immediately. Opening a canvas hides the project sidebar; Back restores the
-   previous folder. Web asset downloads are not yet an import path.
+   previous folder. Connected cloud files cache their images for offline use.
 3. In Code, choose Codex or Claude Code, optionally attach design references, and
    start a thread. The harness runs in the project root and receives the attached
    design file paths. Follow-up messages resume the locally bound native harness session.

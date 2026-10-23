@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   appendFile,
   lstat,
@@ -29,6 +29,16 @@ import type {
 import { summarizeThread } from "../shared/thread-updates";
 import { ThreadAuthority } from "./thread-authority";
 import { readLocalFile } from "./local-files";
+import { CloudCompute } from "./cloud-compute";
+import {
+  designFileStamp,
+  summarizeDesignFile,
+  type ParsedDesignFile,
+  type DesignFileSummary,
+} from "./design-file";
+
+// One lazy, unref'd reader per process, rather than a worker for each open project/store.
+const designReader = new CloudCompute();
 
 import { storedThreadSchema as threadSchema } from "../shared/contracts";
 
@@ -37,7 +47,15 @@ const registrySchema = z.object({
   version: z.literal(1),
   activeProjectId: z.string().nullable(),
   projects: z
-    .array(z.object({ id: z.string(), name: z.string(), path: z.string(), openedAt: z.string() }))
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        path: z.string(),
+        openedAt: z.string(),
+        cloud: z.boolean().optional(),
+      }),
+    )
     .max(100),
 });
 
@@ -52,6 +70,8 @@ export class ProjectStore {
     projects: [],
   };
   private writes = Promise.resolve();
+  private designCache = new Map<string, ParsedDesignFile>();
+  private summaryCache = new Map<string, DesignFileSummary>();
 
   private authority: ThreadAuthority;
   constructor(private directory: string) {
@@ -83,14 +103,15 @@ export class ProjectStore {
     return project;
   }
 
-  async open(directory: string) {
+  async open(directory: string, cloudName?: string) {
     const path = await realpath(directory);
     if (!(await stat(path)).isDirectory()) throw new Error("Select a project directory.");
     const project: Project = {
       id: randomUUID(),
-      name: basename(path),
+      name: cloudName ?? basename(path),
       path,
       openedAt: new Date().toISOString(),
+      ...(cloudName ? { cloud: true } : {}),
     };
     await this.prepare(project);
     const metadataPath = join(path, ".tidy", "project.json");
@@ -122,7 +143,7 @@ export class ProjectStore {
       project,
       ...this.projects.filter((item) => item.id !== project.id),
     ].slice(0, 100);
-    this.registry.activeProjectId = project.id;
+    if (!cloudName) this.registry.activeProjectId = project.id;
     await this.writeRegistry();
     return this.snapshot(project.id);
   }
@@ -346,25 +367,27 @@ export class ProjectStore {
     includeAssets = true,
   ): Promise<LocalDesign> {
     const path = await this.storagePath(projectId, "designs", designId);
-    const data = z
-      .object({
-        id,
-        name: z.string().min(1).max(120),
-        document: z.unknown(),
-        folderId: id.nullable().optional(),
-      })
-      .parse(await this.read(path));
-    if (data.id !== designId) throw new Error("Design ID does not match its filename.");
-    const document = parseDesignDocument(data.document);
+    const stamp = designFileStamp(await stat(path, { bigint: true }));
+    let cached = this.designCache.get(path);
+    if (!cached || cached.stamp !== stamp) {
+      cached = await designReader.readFile(path);
+      this.designCache.delete(path);
+      this.designCache.set(path, cached);
+      while (this.designCache.size > 8)
+        this.designCache.delete(this.designCache.keys().next().value!);
+      this.cacheSummary(path, summarizeDesignFile(cached));
+    }
+    // Internal sync readers treat documents as immutable. Renderer-facing reads get their own copy.
+    const document = includeAssets ? structuredClone(cached.document) : cached.document;
     return {
-      id: data.id,
-      name: data.name,
-      folderId: data.folderId ?? null,
-      nodeCount: document.nodes.length,
-      path,
-      updatedAt: (await stat(path)).mtime.toISOString(),
+      id: cached.id,
+      name: cached.name,
+      folderId: cached.folderId,
+      nodeCount: cached.nodeCount,
+      path: cached.path,
+      updatedAt: cached.updatedAt,
       document,
-      version: createHash("sha256").update(JSON.stringify(data)).digest("hex"),
+      version: cached.version,
       assets: Object.fromEntries(
         await Promise.all(
           (includeAssets ? [...documentAssetIds(document)] : []).map(async (assetId) => {
@@ -380,6 +403,33 @@ export class ProjectStore {
         ),
       ),
     };
+  }
+
+  private cacheSummary(path: string, summary: DesignFileSummary) {
+    this.summaryCache.delete(path);
+    this.summaryCache.set(path, summary);
+    while (this.summaryCache.size > 1000)
+      this.summaryCache.delete(this.summaryCache.keys().next().value!);
+  }
+
+  private async designSummary(projectId: string, designId: string) {
+    const path = await this.storagePath(projectId, "designs", designId);
+    const stamp = designFileStamp(await stat(path, { bigint: true }));
+    let cached = this.summaryCache.get(path);
+    if (!cached || cached.stamp !== stamp) {
+      cached = await designReader.readSummary(path);
+      this.cacheSummary(path, cached);
+    }
+    return cached;
+  }
+  async designStamp(projectId: string, designId: string) {
+    return designFileStamp(
+      await stat(await this.storagePath(projectId, "designs", designId), { bigint: true }),
+    );
+  }
+  async designIdentity(projectId: string, designId: string) {
+    const { stamp, version, name } = await this.designSummary(projectId, designId);
+    return { stamp, version, name };
   }
 
   async createDesign(
@@ -461,6 +511,32 @@ export class ProjectStore {
     return { assetId, url: dataUrl };
   }
 
+  /** Sync uses the same bounded local asset format, without changing portable design IDs. */
+  async readSyncAsset(projectId: string, assetId: string): Promise<string | undefined> {
+    try {
+      return z
+        .object({ dataUrl: z.string().max(3_000_000) })
+        .parse(await this.read(await this.storagePath(projectId, "assets", assetId))).dataUrl;
+    } catch (error) {
+      if (!missing(error)) throw error;
+    }
+  }
+
+  async cacheSyncAsset(projectId: string, assetId: string, dataUrl: string) {
+    if (
+      !/^data:image\/(?:png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(dataUrl) ||
+      dataUrl.length > 3_000_000
+    )
+      throw new Error("Unsupported cloud image.");
+    const previous = await this.readSyncAsset(projectId, assetId);
+    if (previous !== undefined) {
+      if (previous !== dataUrl)
+        throw new Error("A local image has changed. Keep both copies to continue.");
+      return;
+    }
+    await this.atomicWrite(() => this.storagePath(projectId, "assets", assetId), { dataUrl });
+  }
+
   async designs(projectId: string) {
     const directory = await this.storagePath(projectId, "designs");
     const files = (await readdir(directory)).filter(
@@ -469,12 +545,12 @@ export class ProjectStore {
     const designs = await Promise.all(
       files.map(async (file) => {
         try {
-          const design = await this.readDesign(projectId, file.slice(0, -5), false);
+          const design = await this.designSummary(projectId, file.slice(0, -5));
           return {
             id: design.id,
             name: design.name,
             folderId: design.folderId,
-            nodeCount: design.document.nodes.length,
+            nodeCount: design.nodeCount,
             path: design.path,
             updatedAt: design.updatedAt,
           };
