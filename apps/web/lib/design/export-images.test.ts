@@ -1,8 +1,19 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { createExportImageSession, embedDesignImages } from "./export-images";
+import { createExportImageSession, embedDesignImages, embedThumbnailImages } from "./export-images";
 
 const originalFetch = globalThis.fetch;
 const originalReader = globalThis.FileReader;
+const originalImageElement = globalThis.HTMLImageElement;
+const originalTimeout = AbortSignal.timeout;
+class TestImage {
+  src: string;
+  constructor(private original: string) {
+    this.src = original;
+  }
+  getAttribute(name: string) {
+    return name === "data-original-src" ? this.original : null;
+  }
+}
 class TestFileReader {
   result: string | null = null;
   onload?: () => void;
@@ -24,10 +35,13 @@ class TestFileReader {
 }
 beforeEach(() => {
   globalThis.FileReader = TestFileReader as unknown as typeof FileReader;
+  globalThis.HTMLImageElement = TestImage as unknown as typeof HTMLImageElement;
 });
 afterEach(() => {
   globalThis.fetch = originalFetch;
   globalThis.FileReader = originalReader;
+  globalThis.HTMLImageElement = originalImageElement;
+  AbortSignal.timeout = originalTimeout;
 });
 function images(body = new Uint8Array([1, 2, 3])) {
   const calls: string[] = [];
@@ -55,6 +69,144 @@ test("raster exports embed CSS image masks once and keep the intersection layer"
   expect(style.maskImage).toBe('url("data:image/png;base64,AQID"), linear-gradient(white, white)');
   expect(second.maskImage).toBe(style.maskImage);
   expect(style.webkitMaskImage).toBe(style.maskImage);
+});
+
+test("thumbnail capture tolerates missing local images and masks while exports remain strict", async () => {
+  const missing = "/__tidy/assets/project/missing";
+  const available = "/__tidy/assets/project/available";
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    calls.push(url);
+    return url === missing
+      ? new Response(null, { status: 404 })
+      : new Response(new Uint8Array([1, 2, 3]), { headers: { "Content-Type": "image/png" } });
+  }) as unknown as typeof fetch;
+  const absent = new TestImage(missing),
+    present = new TestImage(available);
+  const style = {
+    maskImage: `url("${missing}"), linear-gradient(white, white)`,
+    webkitMaskImage: "",
+  };
+  const clone = {
+    querySelectorAll(selector: string) {
+      return selector === "img, svg image"
+        ? [absent, present]
+        : selector === "[style]"
+          ? [{ style }]
+          : [];
+    },
+  } as unknown as HTMLElement;
+  expect(await embedThumbnailImages(clone)).toBe(false);
+  expect(calls).toEqual([missing, available]);
+  expect(decodeURIComponent(absent.src)).toContain('fill="#eeeeee"');
+  expect(present.src).toBe("data:image/png;base64,AQID");
+  expect(style.maskImage).not.toContain(missing);
+  expect(style.maskImage).toContain("linear-gradient(white, white)");
+  expect(decodeURIComponent(style.maskImage)).toContain('width="1"');
+  await expect(embedDesignImages(clone)).rejects.toThrow(
+    "Could not include an image in the export.",
+  );
+});
+
+test("thumbnail cancellation is not converted into a successful partial capture", async () => {
+  const controller = new AbortController();
+  globalThis.fetch = (async () => {
+    controller.abort(new Error("Thumbnail canceled"));
+    return new Response(null, { status: 404 });
+  }) as unknown as typeof fetch;
+  const image = new TestImage("/__tidy/assets/project/pending");
+  const clone = {
+    querySelectorAll(selector: string) {
+      return selector === "img, svg image" ? [image] : [];
+    },
+  } as unknown as HTMLElement;
+  await expect(embedThumbnailImages(clone, controller.signal)).rejects.toThrow(
+    "Thumbnail canceled",
+  );
+  expect(image.src).toBe("/__tidy/assets/project/pending");
+});
+
+test("a failed strict export waits for a stalled external image's bounded cleanup", async () => {
+  const deadlines: AbortController[] = [];
+  AbortSignal.timeout = (milliseconds) => {
+    expect(milliseconds).toBe(15_000);
+    const controller = new AbortController();
+    deadlines.push(controller);
+    return controller.signal;
+  };
+  let cleaned = false,
+    settled = false;
+  globalThis.fetch = (async (url: string, options: RequestInit) => {
+    if (url.endsWith("missing")) return new Response(null, { status: 404 });
+    return new Promise<Response>((_resolve, reject) => {
+      options.signal!.addEventListener(
+        "abort",
+        () => {
+          cleaned = true;
+          reject(options.signal!.reason);
+        },
+        { once: true },
+      );
+    });
+  }) as unknown as typeof fetch;
+  const images = [
+    new TestImage("https://external.example/missing"),
+    new TestImage("https://external.example/stalled"),
+  ];
+  const clone = {
+    querySelectorAll(selector: string) {
+      return selector === "img, svg image" ? images : [];
+    },
+  } as unknown as HTMLElement;
+  const result = embedDesignImages(clone).then(
+    () => {
+      settled = true;
+      return undefined;
+    },
+    (error: unknown) => {
+      settled = true;
+      return error;
+    },
+  );
+  try {
+    await Bun.sleep(0);
+    expect(deadlines).toHaveLength(2);
+    expect(settled).toBe(false);
+    expect(cleaned).toBe(false);
+  } finally {
+    for (const deadline of deadlines)
+      deadline.abort(new DOMException("Image timed out", "TimeoutError"));
+  }
+  expect(await result).toEqual(new Error("Could not include an image in the export."));
+  expect(cleaned).toBe(true);
+  expect(settled).toBe(true);
+});
+
+test("external image deadlines also cancel a pending data-URL conversion", async () => {
+  const deadline = new AbortController();
+  AbortSignal.timeout = () => deadline.signal;
+  let converting = false,
+    canceled = false;
+  globalThis.FileReader = class {
+    abort() {
+      canceled = true;
+    }
+    readAsDataURL() {
+      converting = true;
+    }
+  } as unknown as typeof FileReader;
+  images();
+  const session = createExportImageSession();
+  const loading = session.load("https://external.example/original").catch((error) => error);
+  try {
+    await Bun.sleep(0);
+    expect(converting).toBe(true);
+    deadline.abort(new DOMException("Image timed out", "TimeoutError"));
+    expect((await loading).name).toBe("TimeoutError");
+    expect(canceled).toBe(true);
+  } finally {
+    session.dispose();
+  }
 });
 
 test("an export shares identical original bytes and in-flight reads, then releases them", async () => {
