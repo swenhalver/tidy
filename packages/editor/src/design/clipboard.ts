@@ -27,12 +27,20 @@ import {
   type TokenBinding,
 } from "./design-tokens";
 import { importTokenDefinitions } from "./tokens";
+import { placeClipboardRoots } from "./clipboard-placement";
 
 const payloadSchema = z
   .object({
     bellaClipboard: z.literal(1),
     kind: z.enum(["layers", "properties"]),
     sourceFile: z.string().max(120),
+    sourcePosition: z
+      .object({
+        x: z.number().finite().min(-100000).max(100000),
+        y: z.number().finite().min(-100000).max(100000),
+      })
+      .strict()
+      .optional(),
     nodes: z.array(designNodeSchema).min(1).max(DESIGN_DOCUMENT_LIMITS.nodes),
     resolvedNodes: z.array(designNodeSchema).max(DESIGN_DOCUMENT_LIMITS.nodes).optional(),
     tokens: z.record(z.string(), z.string()).default({}),
@@ -80,6 +88,8 @@ export function copyLayers(
   ]);
   const bases = resolvedDocumentNodes(document, new Map(), copied);
   const resolved = resolvedDocumentNodes(document);
+  const resolvedById = new Map(resolved.map((node) => [node.id, node]));
+  const rootBoxes = roots.map((node) => boxes?.get(node.id) ?? resolvedById.get(node.id)!.box);
   const placeRoot = (node: DesignNode) =>
     rootIds.has(node.id)
       ? {
@@ -96,6 +106,12 @@ export function copyLayers(
     bellaClipboard: 1,
     kind: "layers",
     sourceFile,
+    sourcePosition: roots.every((node) => node.parentId === roots[0].parentId)
+      ? {
+          x: Math.min(...rootBoxes.map((box) => box.x)),
+          y: Math.min(...rootBoxes.map((box) => box.y)),
+        }
+      : undefined,
     tokens: document.tokens,
     designTokens: document.designTokens,
     resolvedNodes: resolved.filter((node) => copied.has(node.id) && node.instanceOf).map(placeRoot),
@@ -187,11 +203,13 @@ export function pasteLayers(
     pageId: string;
     parentId: string | null;
     inPlace?: boolean;
+    position?: { x: number; y: number };
+    viewport?: DesignNode["box"];
     createId: () => string;
     boxes?: MeasuredBoxes;
     importedDependencyIds?: ReadonlySet<string>;
   },
-): { document: DesignDocument; ids: string[] } {
+): { document: DesignDocument; ids: string[]; bounds: DesignNode["box"] | null } {
   if (payload.kind !== "layers") throw new Error("The clipboard does not contain layers.");
   const ids = new Map(payload.nodes.map((node) => [node.id, options.createId()]));
   const imported = importTokens(document, payload);
@@ -202,6 +220,8 @@ export function pasteLayers(
     for (const id of componentSubtreeIds(payload.nodes, n.id)) libraryIds.add(id);
   const dependencyIds = options.importedDependencyIds ?? new Set<string>();
   const roots = payload.nodes.filter((node) => node.parentId === null);
+  const resolvedById = new Map(payload.resolvedNodes?.map((node) => [node.id, node]));
+  const placedRoots = roots.filter((node) => !node.librarySource && !dependencyIds.has(node.id));
   const parent = options.parentId ? existing.get(options.parentId) : undefined;
   if (
     options.parentId &&
@@ -218,39 +238,47 @@ export function pasteLayers(
     throw new Error("Unlock and show the target frame before pasting layers into it.");
   }
   const renderedTarget = resolvedDocumentNodes(document);
+  const geometryFor = (node: DesignNode) => imported.node(resolvedById.get(node.id) ?? node);
+  const placement = placeClipboardRoots(placedRoots.map(geometryFor), renderedTarget, {
+    ...options,
+    sameFile,
+    sourcePosition: payload.sourcePosition,
+  });
   const nodes = payload.nodes.map((node): DesignNode => {
     const root = node.parentId === null;
     const hasMaster =
       node.instanceOf && (ids.has(node.instanceOf) || (sameFile && existing.has(node.instanceOf)));
     const detached = Boolean(node.instanceOf && !hasMaster);
-    const appearance = detached
-      ? (payload.resolvedNodes?.find((item) => item.id === node.id) ?? node)
-      : node;
+    const appearance = detached ? (resolvedById.get(node.id) ?? node) : node;
     const styled = imported.node(appearance);
     const parentId = root
       ? node.type === "artboard"
         ? null
         : node.librarySource || dependencyIds.has(node.id)
           ? null
-          : options.parentId
+          : placement.parentId
       : ids.get(node.parentId!)!;
     const geometrySource =
-      root && hasMaster
-        ? imported.node(payload.resolvedNodes?.find((item) => item.id === node.id) ?? appearance)
-        : styled;
+      root && hasMaster ? imported.node(resolvedById.get(node.id) ?? appearance) : styled;
+    const preservePosition =
+      dependencyIds.has(node.id) ||
+      ((options.position !== undefined || options.viewport !== undefined) &&
+        libraryIds.has(node.id));
+    const offset = options.inPlace || preservePosition ? 0 : 24;
     const placementBox = {
       ...geometrySource.box,
-      x: geometrySource.box.x + (options.inPlace || dependencyIds.has(node.id) ? 0 : 24),
-      y: geometrySource.box.y + (options.inPlace || dependencyIds.has(node.id) ? 0 : 24),
+      x: geometrySource.box.x + offset,
+      y: geometrySource.box.y + offset,
     };
     const placed = root
-      ? reparentGeometry(
+      ? (placement.roots.get(node.id) ??
+        reparentGeometry(
           renderedTarget,
           { ...geometrySource, parentId: null, box: placementBox },
           parentId,
           options.boxes,
           placementBox,
-        )
+        ))
       : null;
     const link = node.linkTo
       ? (ids.get(node.linkTo) ??
@@ -318,6 +346,7 @@ export function pasteLayers(
     };
   });
   return {
+    bounds: placement.bounds,
     document: parseDesignDocument({
       ...document,
       tokens: imported.tokens,

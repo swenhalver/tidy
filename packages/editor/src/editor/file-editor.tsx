@@ -134,7 +134,11 @@ import {
   containingDrawParent,
 } from "../design/draw-placement";
 import { gestureZoomFactor, wheelZoomFactor } from "../design/canvas-zoom";
-import { CANVAS_FIT_PADDING, fitCanvasView as fit } from "../design/canvas-view";
+import {
+  CANVAS_FIT_PADDING,
+  fitCanvasView as fit,
+  revealCanvasBounds,
+} from "../design/canvas-view";
 import {
   clipboardAssetIds,
   remapClipboardAssets,
@@ -566,8 +570,9 @@ export function FileEditor({
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    nodeId: string;
+    nodeId: string | null;
     behindIds: string[];
+    here?: { position: Point; parentId: string | null };
   } | null>(null);
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
   const viewport = useRef<HTMLDivElement>(null);
@@ -2140,11 +2145,22 @@ export function FileEditor({
     clipboardController.current = controller;
     return () => controller.abort();
   }, []);
-  const pasteContext = useEditorEvent(() => ({
+  const pasteContext = useEditorEvent((here?: { position: Point; parentId: string | null }) => ({
     selectedIds,
     selection,
     pageId: currentPageId,
     readOnly,
+    position: here?.position,
+    targetParentId: here?.parentId,
+    viewport: viewport.current
+      ? {
+          x: -view.x / view.zoom,
+          y: -view.y / view.zoom,
+          width: viewport.current.clientWidth / view.zoom,
+          height: viewport.current.clientHeight / view.zoom,
+        }
+      : undefined,
+    view,
   }));
   const commitClipboard = useEditorEvent(
     (
@@ -2155,6 +2171,9 @@ export function FileEditor({
         pageId: string;
         request: number;
         boxes: Map<string, DesignNode["box"]>;
+        position?: Point;
+        viewport?: DesignNode["box"];
+        view: View;
       },
       inPlace: boolean,
       importWarnings: DesignDocument["warnings"] = [],
@@ -2169,23 +2188,31 @@ export function FileEditor({
       const ids = new Map(payload.nodes.map((node) => [node.id, crypto.randomUUID()]));
       let index = 0;
       const rootIds = payload.nodes
-        .filter((node) => node.parentId === null && !importedDependencyIds.has(node.id))
+        .filter(
+          (node) =>
+            node.parentId === null && !node.librarySource && !importedDependencyIds.has(node.id),
+        )
         .map((node) => ids.get(node.id)!);
       const keepSelection =
         current.pageId !== context.pageId ||
         current.selectedIds !== context.selectedIds ||
         clipboardRequest.current !== context.request;
-      return changeDocument(
+      let bounds: DesignNode["box"] | null = null;
+      const committed = changeDocument(
         (content) => {
-          const next = pasteLayers(content, payload, {
+          const pasted = pasteLayers(content, payload, {
             fileId,
             pageId: context.pageId,
             parentId: context.parentId,
             inPlace,
+            position: context.position,
+            viewport: context.viewport,
             boxes: current.pageId === context.pageId ? measuredBoxes() : context.boxes,
             createId: () => ids.get(payload.nodes[index++].id)!,
             importedDependencyIds,
-          }).document;
+          });
+          bounds = pasted.bounds;
+          const next = pasted.document;
           return {
             ...next,
             warnings: [
@@ -2199,6 +2226,24 @@ export function FileEditor({
         },
         keepSelection ? undefined : rootIds,
       );
+      if (
+        !inPlace &&
+        !context.position &&
+        !keepSelection &&
+        current.view === context.view &&
+        bounds &&
+        viewport.current
+      ) {
+        const canvas = viewport.current;
+        setView(
+          revealCanvasBounds(
+            current.view,
+            { width: canvas.clientWidth, height: canvas.clientHeight },
+            bounds,
+          ),
+        );
+      }
+      return committed;
     },
   );
   async function pasteClipboard(
@@ -2218,19 +2263,25 @@ export function FileEditor({
       content = room.getSnapshot().content;
     const selected = content.nodes.find((node) => node.id === current.selection);
     const parentId =
-      selected && ["artboard", "container"].includes(selected.type)
-        ? selected.id
-        : (selected?.parentId ?? null);
+      current.targetParentId !== undefined
+        ? current.targetParentId
+        : selected && ["artboard", "container"].includes(selected.type)
+          ? selected.id
+          : (selected?.parentId ?? null);
     const context = {
       selectedIds: current.selectedIds,
       parentId,
       pageId: current.pageId,
       request: origin.request,
       boxes: origin.boxes,
+      position: origin.position,
+      viewport: origin.viewport,
+      view: origin.view,
     };
     const signal = clipboardController.current?.signal;
     try {
-      if (current.selection && !selected) throw new Error("The destination layer was removed.");
+      if (current.targetParentId === undefined && current.selection && !selected)
+        throw new Error("The destination layer was removed.");
       // Reject invalid targets before creating any destination assets.
       if (payload.kind === "properties") {
         if (pasteProperties(content, payload, current.selectedIds) === content) return;
@@ -2240,6 +2291,8 @@ export function FileEditor({
           pageId: current.pageId,
           parentId,
           inPlace,
+          position: context.position,
+          viewport: context.viewport,
           boxes: context.boxes,
           createId: () => crypto.randomUUID(),
         });
@@ -2273,15 +2326,20 @@ export function FileEditor({
     const content = room.getSnapshot().content;
     const selected = content.nodes.find((node) => node.id === origin.selection);
     const parentId =
-      selected && ["artboard", "container"].includes(selected.type)
-        ? selected.id
-        : (selected?.parentId ?? null);
+      origin.targetParentId !== undefined
+        ? origin.targetParentId
+        : selected && ["artboard", "container"].includes(selected.type)
+          ? selected.id
+          : (selected?.parentId ?? null);
     const context = {
       selectedIds: origin.selectedIds,
       parentId,
       pageId: origin.pageId,
       request: origin.request,
       boxes: origin.boxes,
+      position: origin.position,
+      viewport: origin.viewport,
+      view: origin.view,
     };
     const signal = clipboardController.current?.signal;
     try {
@@ -2304,8 +2362,12 @@ export function FileEditor({
         fileId,
         pageId: context.pageId,
         parentId,
+        inPlace,
+        position: context.position,
+        viewport: context.viewport,
         boxes: context.boxes,
         createId: () => crypto.randomUUID(),
+        importedDependencyIds: dependencies,
       });
       const assetIds = new Map<string, string>();
       for (const asset of result.assets) {
@@ -2336,10 +2398,14 @@ export function FileEditor({
     }
   }
 
-  async function pasteFromSystem(inPlace = false, properties = false) {
+  async function pasteFromSystem(
+    inPlace = false,
+    properties = false,
+    here?: { position: Point; parentId: string | null },
+  ) {
     const reportClipboardFailure = createReporter("clipboard");
     const origin = {
-      ...pasteContext(),
+      ...pasteContext(here),
       request: ++clipboardRequest.current,
       boxes: measuredBoxes(),
     };
@@ -2490,11 +2556,20 @@ export function FileEditor({
     }
     const bounds = event.currentTarget.getBoundingClientRect();
     const keyboard = event.clientX === 0 && event.clientY === 0;
+    let pasteParent = nodesById.get(nodeId);
+    if (pasteParent && !["artboard", "container"].includes(pasteParent.type))
+      pasteParent = pasteParent.parentId ? nodesById.get(pasteParent.parentId) : undefined;
+    if (pasteParent && pasteParent.layout !== "absolute")
+      pasteParent = pasteParent.parentId ? nodesById.get(pasteParent.parentId) : undefined;
     setContextMenu({
       x: keyboard ? bounds.left + Math.min(bounds.width, 32) : event.clientX,
       y: keyboard ? bounds.top + bounds.height : event.clientY,
       nodeId,
       behindIds,
+      here:
+        !keyboard && viewport.current?.contains(event.target as Node)
+          ? { position: worldPoint(event), parentId: pasteParent?.id ?? null }
+          : undefined,
     });
   }
 
@@ -3726,6 +3801,18 @@ export function FileEditor({
     </div>
   );
 
+  const pasteHereItems: LayerMenuItem[] = contextMenu?.here
+    ? [
+        {
+          label: "Paste here",
+          replayLabel: true,
+          disabled: Boolean(
+            contextMenu.here.parentId && isLayerLocked(nodes, contextMenu.here.parentId),
+          ),
+          onSelect: () => void pasteFromSystem(false, false, contextMenu.here),
+        },
+      ]
+    : [];
   const contextNode = contextMenu ? nodes.find((node) => node.id === contextMenu.nodeId) : null;
   const contextInstance = contextNode
     ? owningInstance(snapshot.content.nodes, contextNode.id)
@@ -3749,6 +3836,7 @@ export function FileEditor({
           disabled: isLayerLocked(nodes, contextNode.id),
           onSelect: () => void pasteFromSystem(false, true),
         },
+        ...pasteHereItems,
         ...(contextNode.type !== "artboard"
           ? [
               {
@@ -3898,7 +3986,7 @@ export function FileEditor({
           onSelect: () => void removeSelection(),
         },
       ]
-    : [];
+    : pasteHereItems;
   const pageMenuIndex = pages.findIndex((page) => page.id === pageMenu?.pageId);
   const pageMenuItems: LayerMenuItem[] =
     pageMenu && !readOnly
@@ -4538,7 +4626,28 @@ export function FileEditor({
           room.publishPresence({ cursor: null }, true);
         }}
         onContextMenu={(event) => {
-          if (viewPreferences.rightClickPan) event.preventDefault();
+          if (viewPreferences.rightClickPan && event.button === 2) {
+            event.preventDefault();
+            return;
+          }
+          if (
+            readOnly ||
+            event.defaultPrevented ||
+            (event.target as Element).closest("[data-canvas-control]")
+          )
+            return;
+          event.preventDefault();
+          const bounds = event.currentTarget.getBoundingClientRect();
+          const keyboard = event.clientX === 0 && event.clientY === 0;
+          const clientX = keyboard ? bounds.left + bounds.width / 2 : event.clientX;
+          const clientY = keyboard ? bounds.top + bounds.height / 2 : event.clientY;
+          setContextMenu({
+            x: clientX,
+            y: clientY,
+            nodeId: null,
+            behindIds: [],
+            here: { position: worldPoint({ clientX, clientY }), parentId: null },
+          });
         }}
         onPointerDownCapture={beginSelectedLayersDrag}
         onContextMenuCapture={(event) => {
@@ -5382,8 +5491,9 @@ export function FileEditor({
           />
         </aside>
       )}
-      {contextMenu && contextNode && (
+      {contextMenu && contextItems.length > 0 && (
         <LayerContextMenu
+          label={contextNode ? "Layer actions" : "Canvas actions"}
           x={contextMenu.x}
           y={contextMenu.y}
           items={contextItems}

@@ -122,6 +122,38 @@ test("measured flow/fill placement survives copy, same-file paste and reparent i
   expect(applyDocumentPatch(moved, invertPatch(diffDocument(source, moved)))).toEqual(source);
 });
 
+test("normal paste preserves appearance and relative position inside a transformed destination", () => {
+  const source = {
+    ...blankDesignDocument(),
+    nodes: [{ ...layer("copied"), style: { rotation: 37, flipY: true } }],
+  };
+  const parent = {
+    ...layer("destination"),
+    box: { x: 100, y: 200, width: 500, height: 400 },
+    style: { rotation: -60, flipX: true, borderLeftWidth: 7, borderTopWidth: 3 },
+  };
+  const payload = readDesignClipboard(copyLayers(source, ["copied"], "source"))!;
+  const pasted = pasteLayers({ ...blankDesignDocument(), nodes: [parent] }, payload, {
+    fileId: "target",
+    pageId: "page-1",
+    parentId: parent.id,
+    viewport: { x: -500, y: -500, width: 2000, height: 2000 },
+    createId: () => "pasted",
+  });
+  const before = corners(source.nodes, source.nodes[0]);
+  const after = corners(pasted.document.nodes, pasted.document.nodes[1]);
+  expect(pasted.document.nodes[1].box.x).toBeCloseTo(30, 8);
+  expect(pasted.document.nodes[1].box.y).toBeCloseTo(40, 8);
+  expect(pasted.document.nodes[1].box).toMatchObject({ width: 100, height: 50 });
+  sameCorners(
+    before.map((point) => ({
+      x: point.x + after[0].x - before[0].x,
+      y: point.y + after[0].y - before[0].y,
+    })),
+    after,
+  );
+});
+
 test("tree reparent rejects hidden ancestry and cycles and preserves transformed geometry", () => {
   const parent = { ...layer("parent"), style: { rotation: 90 } },
     child = layer("child", parent.id);
