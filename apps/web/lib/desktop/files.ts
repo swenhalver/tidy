@@ -5,6 +5,35 @@ import { publishFileChanges } from "@/lib/realtime/server";
 import { db } from "@/lib/db";
 import { EDIT_ROLES_SQL, VIEW_ROLES_SQL } from "@/lib/organizations/roles";
 
+/** Keep the native catalog metadata-only; image bytes are requested separately. */
+export async function listDesktopFiles(userId: string, organizationId: string) {
+  const result = await db.query<{
+    id: string;
+    name: string;
+    folderId: string | null;
+    updatedAt: Date;
+    createdAt: Date;
+    creatorId: string;
+    creatorName: string;
+    creatorImage: string | null;
+  }>(
+    `select f."id", f."name", f."folderId", f."updatedAt", f."createdAt",
+      creator."id" as "creatorId", creator."name" as "creatorName",
+      case when length(creator."image") <= 2048 then creator."image" end as "creatorImage"
+     from "designFile" f
+     join "member" m on m."organizationId"=f."organizationId" and m."userId"=$1 and m."role" in ${VIEW_ROLES_SQL}
+     join "user" viewer on viewer."id"=m."userId" and viewer."emailVerified"=true
+     join "user" creator on creator."id"=f."createdBy"
+     where f."organizationId"=$2 and f."archivedAt" is null
+     order by f."updatedAt" desc, f."id"`,
+    [userId, organizationId],
+  );
+  // PostgreSQL counts Unicode code points; the native schema bounds UTF-16 code units.
+  return result.rows.map((file) =>
+    file.creatorImage && file.creatorImage.length > 2048 ? { ...file, creatorImage: null } : file,
+  );
+}
+
 /** Metadata only: one bounded query for all downloaded designs, with live access locks. */
 export async function desktopManifest(userId: string, fileIds: string[]) {
   const result = await db.query<{
