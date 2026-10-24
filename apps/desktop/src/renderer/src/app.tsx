@@ -1,3 +1,7 @@
+import { z } from "zod";
+import { useSessionState } from "./session-state";
+import { selectionSchema } from "../../shared/navigation-state";
+import { useWorkspaceNavigation } from "./use-workspace-navigation";
 import { SkillPrompt } from "./skill-prompt";
 import { skillCommand, type Skill } from "../../shared/skills";
 import { errorMessage } from "@tidy/ui/errors";
@@ -66,44 +70,26 @@ const errorText = (error: unknown) =>
 export function App() {
   const api = window.tidy;
   const cloud = useCloud(api?.cloud);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useSessionState("settings", z.boolean(), false);
   const settingsTrigger = useRef<HTMLButtonElement>(null);
   const settingsWasOpen = useRef(false);
   useEffect(() => {
     if (settingsWasOpen.current && !settingsOpen) settingsTrigger.current?.focus();
     settingsWasOpen.current = settingsOpen;
   }, [settingsOpen]);
-  const [location, setLocation] = useState<"local" | "cloud">("local");
-  const [cloudOrganizationId, setCloudOrganizationId] = useState("");
+  const {
+    target,
+    location,
+    cloudOrganizationId,
+    navigation,
+    selectLocalWorkspace,
+    selectCloudWorkspace,
+  } = useWorkspaceNavigation({
+    cloud,
+    hasCloudAPI: Boolean(api?.cloud),
+  });
   const [cloudCanvas, setCloudCanvas] = useState(false);
-  const cloudAccount = useRef<string | undefined>(undefined);
-  const navigation = useRef(0);
-  useEffect(() => {
-    if (!cloud.state?.signedIn) {
-      cloudAccount.current = undefined;
-      setLocation("local");
-      setCloudOrganizationId("");
-      return;
-    }
-    if (!cloud.account) return;
-    if (cloudAccount.current === cloud.account.id) {
-      if (
-        cloudOrganizationId &&
-        !cloud.account.organizations.some((o) => o.id === cloudOrganizationId && o.canEdit)
-      ) {
-        setCloudOrganizationId(cloud.account.organizations.find((o) => o.canEdit)?.id ?? "");
-        setLocation("local");
-      }
-      return;
-    }
-    cloudAccount.current = cloud.account.id;
-    const organization = cloud.account.organizations.find((o) => o.canEdit);
-    if (organization) {
-      setCloudOrganizationId(organization.id);
-      if (navigation.current === 0) setLocation("cloud");
-    }
-  }, [cloud.state?.signedIn, cloud.account, cloudOrganizationId]);
-  const [mode, setMode] = useState<Mode>("design");
+  const [mode, setMode] = useSessionState<Mode>("mode", z.enum(["design", "code"]), "design");
   const [designNavigation, setDesignNavigation] = useState<HTMLElement | null>(null);
   const [loading, setLoading] = useState(true);
   const [opening, setOpening] = useState(false);
@@ -115,12 +101,16 @@ export function App() {
     if (previous?.isConnected && document.activeElement === document.body) previous.focus();
   }, [opening]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectId] = useSessionState(
+    "project",
+    z.string().nullable(),
+    null,
+  );
   const [snapshots, setSnapshots] = useState<Record<string, ProjectSnapshot>>({});
   const [harnesses, setHarnesses] = useState<HarnessConnection[]>([]);
   const [threads, setThreads] = useState<Record<string, Thread>>({});
-  const [selectedThreads, setSelectedThreads] = useState<Record<string, string | null>>({});
-  const [selectedDesigns, setSelectedDesigns] = useState<Record<string, string | null>>({});
+  const [selectedThreads, setSelectedThreads] = useSessionState("threads", selectionSchema, {});
+  const [selectedDesigns, setSelectedDesigns] = useSessionState("designs", selectionSchema, {});
   const [designs, setDesigns] = useState<Record<string, LocalDesign>>({});
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [harnessDetails, setHarnessDetails] = useState<
@@ -465,19 +455,37 @@ export function App() {
         return entry ? { ...current, [projectId]: applyProjectEvent(entry, event) } : current;
       });
     });
+    const initialNavigation = navigation.current;
     void api
       .bootstrap()
-      .then((value) => {
+      .then(async (value) => {
         if (!mounted) return;
         setProjects(value.projects.filter((p) => !p.cloud));
         setHarnesses(value.harnesses);
-        if (value.activeProject && !value.activeProject.project.cloud) {
-          const snapshot = [...initialEvents.values()].reduce(
-            applyProjectEvent,
-            value.activeProject,
-          );
-          setSnapshots((current) => ({ ...current, [snapshot.project.id]: snapshot }));
-          setActiveProjectId(value.activeProject.project.id);
+        let activeProject = value.activeProject;
+        if (
+          navigation.current === initialNavigation &&
+          activeProjectId &&
+          value.projects.some((p) => p.id === activeProjectId && !p.cloud) &&
+          activeProject?.project.id !== activeProjectId
+        ) {
+          try {
+            activeProject = await api.selectProject(activeProjectId);
+          } catch (cause) {
+            if (mounted && navigation.current === initialNavigation)
+              setError({
+                text: "Could not reopen the previous project. Choose a recent project or open its folder again.",
+                original: cause,
+              });
+          }
+        }
+        if (!mounted) return;
+        if (navigation.current === initialNavigation) {
+          if (activeProject && !activeProject.project.cloud) {
+            const snapshot = [...initialEvents.values()].reduce(applyProjectEvent, activeProject);
+            setSnapshots((current) => ({ ...current, [snapshot.project.id]: snapshot }));
+            setActiveProjectId(snapshot.project.id);
+          } else setActiveProjectId(null);
         }
         bootstrapping = false;
         initialEvents.clear();
@@ -495,7 +503,20 @@ export function App() {
   }, [api]);
 
   useEffect(() => {
-    if (!api || !project || !selectedThreadId || threads[selectedThreadId]) return;
+    if (
+      location !== "local" ||
+      mode !== "code" ||
+      settingsOpen ||
+      !api ||
+      !project ||
+      !selectedThreadId ||
+      threads[selectedThreadId]
+    )
+      return;
+    if (!snapshot?.threads.some((item) => item.id === selectedThreadId)) {
+      selectThread(project.id, null);
+      return;
+    }
     let active = true;
     void api
       .readThread(project.id, selectedThreadId)
@@ -512,10 +533,13 @@ export function App() {
     return () => {
       active = false;
     };
-  }, [api, project, selectedThreadId, threads]);
+  }, [api, project, selectedThreadId, threads, location, mode, settingsOpen]);
 
   useEffect(() => {
     if (
+      location !== "local" ||
+      mode !== "design" ||
+      settingsOpen ||
       !api ||
       !project ||
       !selectedDesignId ||
@@ -535,7 +559,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, [api, project, selectedDesignId, designs, snapshot?.designs]);
+  }, [api, project, selectedDesignId, designs, snapshot?.designs, location, mode, settingsOpen]);
 
   async function chooseProject(projectId?: string) {
     if (!api || opening) return;
@@ -548,7 +572,7 @@ export function App() {
       const value = projectId ? await api.selectProject(projectId) : await api.openProject();
       if (value && navigation.current === generation) {
         applySnapshot(value);
-        setLocation("local");
+        selectLocalWorkspace();
       }
     } catch (value) {
       if (navigation.current === generation) setError({ text: errorText(value), original: value });
@@ -1043,6 +1067,7 @@ export function App() {
               }
             : undefined
         }
+        onNavigate={backToFiles}
         onOpen={(id) => setSelectedDesigns((current) => ({ ...current, [project.id]: id }))}
         onCreated={(value) => {
           updateLocalDesign(value);
@@ -1075,6 +1100,7 @@ export function App() {
     cloud.account,
     cloud.state,
     filesActive,
+    backToFiles,
   ]);
 
   const canvasFocused = location === "cloud" ? cloudCanvas : mode === "design" && Boolean(design);
@@ -1091,8 +1117,18 @@ export function App() {
           <div className="project-picker" title={project?.name}>
             {(project || cloud.account) && (
               <SelectMenu
-                value={location === "cloud" ? `cloud:${cloudOrganizationId}` : (project?.id ?? "")}
+                value={
+                  target?.kind === "cloud" ? `cloud:${target.organizationId}` : (project?.id ?? "")
+                }
                 options={[
+                  ...(target?.kind === "cloud" && !cloudOrganizationId
+                    ? [
+                        {
+                          value: `cloud:${target.organizationId}`,
+                          label: cloud.error ? "Workspace unavailable" : "Opening workspace…",
+                        },
+                      ]
+                    : []),
                   ...(cloud.account?.organizations
                     .filter((o) => o.canEdit)
                     .map((o) => ({
@@ -1110,11 +1146,8 @@ export function App() {
                 label="Workspace"
                 disabled={opening}
                 onChange={(value) => {
-                  if (value.startsWith("cloud:")) {
-                    navigation.current++;
-                    setCloudOrganizationId(value.slice(6));
-                    setLocation("cloud");
-                  } else void chooseProject(value === "open" ? undefined : value);
+                  if (value.startsWith("cloud:")) selectCloudWorkspace(value.slice(6));
+                  else void chooseProject(value === "open" ? undefined : value);
                 }}
                 triggerClassName="project-trigger"
               />
@@ -1199,9 +1232,20 @@ export function App() {
         </div>
       </aside>
       <main className="workspace" hidden={settingsOpen}>
+        {location === "cloud" && !cloudOrganizationId && (
+          <div className="cloud-unavailable">
+            <p role={cloud.error ? "alert" : "status"}>{cloud.error || "Opening workspace…"}</p>
+            {cloud.error && (
+              <Button className="quiet-button" onClick={cloud.retry}>
+                Try again
+              </Button>
+            )}
+          </div>
+        )}
         {api && cloud.state?.signedIn && cloudOrganizationId && (
           <div className="workspace-view" hidden={location !== "cloud"}>
             <CloudWorkspace
+              key={`${cloud.account?.id}:${cloudOrganizationId}`}
               api={api}
               cloud={cloud}
               organizationId={cloudOrganizationId}

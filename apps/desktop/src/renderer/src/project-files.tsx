@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { useSessionState } from "./session-state";
 import { useErrorNotice } from "@tidy/ui/use-error-notice";
 import { createPortal } from "react-dom";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
@@ -24,6 +26,7 @@ export function ProjectFiles({
   snapshot,
   navigationTarget,
   onOpen,
+  onNavigate,
   onCreated,
   onUpdate,
   onFolderUpdate,
@@ -35,6 +38,7 @@ export function ProjectFiles({
   navigationTarget: HTMLElement | null;
   active?: boolean;
   onOpen(id: string): void;
+  onNavigate(): void;
   onCreated(file: LocalDesign): void;
   onUpdate(file: LocalDesign): void;
   onFolderUpdate(folder: DesignFolder): void;
@@ -46,7 +50,11 @@ export function ProjectFiles({
   };
 }) {
   const projectId = snapshot.project.id;
-  const [folderId, setFolderId] = useState<string | null>(null);
+  const [folderId, setFolderId] = useSessionState(
+    `folder:${projectId}`,
+    z.string().nullable(),
+    null,
+  );
   const [view, setView] = useState<"grid" | "list">(() => {
     try {
       return localStorage.getItem("tidy:design-file-view") === "list" ? "list" : "grid";
@@ -80,6 +88,7 @@ export function ProjectFiles({
     return folder ? displayName(folder) : "Unfiled";
   }
   const openFolder = (id: string | null) => {
+    onNavigate();
     setFolderId(id);
     setError("");
     setEditing(null);
