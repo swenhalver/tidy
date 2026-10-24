@@ -1,3 +1,4 @@
+import { repositoryRoot, switchRepositoryBranch } from "./repository-context";
 import { HarnessSkills } from "./harness-skills";
 import { summarizeThread } from "../shared/thread-updates";
 import {
@@ -57,6 +58,7 @@ type Job = {
 };
 
 export class WorkspaceService {
+  private repositoryChanges = new Map<string, Promise<unknown>>();
   private commands = new Map<string, Promise<unknown>>();
   private automaticQueues = new Set<string>();
   private stopVersions = new Map<string, number>();
@@ -77,6 +79,39 @@ export class WorkspaceService {
     private configure = validateHarnessSettings,
     readonly skills = new HarnessSkills(locate),
   ) {}
+
+  async switchBranch(projectId: string, branch: string) {
+    if (this.closing) throw new Error("Tidy is closing.");
+    const project = this.store.project(projectId);
+    if (this.repositoryChanges.size)
+      throw new Error("Wait for the active branch switch to finish.");
+    const operation = (async () => {
+      const activeProjects = new Set([
+        ...[...this.jobs.values()].map((job) => job.thread.projectId),
+        ...this.starting.values(),
+      ]);
+      const root = await repositoryRoot(project.path);
+      if (!root) throw new Error("Could not verify the repository root. Try switching again.");
+      const activeRoots = await Promise.all(
+        [...activeProjects].map((id) => repositoryRoot(this.store.project(id).path)),
+      );
+      if (activeRoots.some((activeRoot) => !activeRoot))
+        throw new Error(
+          "Could not verify an active project's repository root. Wait for its work to finish.",
+        );
+      if (activeRoots.includes(root))
+        throw new Error(
+          "Wait for this repository's active work to finish before switching branches.",
+        );
+      return await switchRepositoryBranch(project.path, branch);
+    })();
+    this.repositoryChanges.set(projectId, operation);
+    try {
+      return await operation;
+    } finally {
+      this.repositoryChanges.delete(projectId);
+    }
+  }
 
   private serialize<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.commands.get(threadId) ?? Promise.resolve();
@@ -226,6 +261,10 @@ export class WorkspaceService {
   }
 
   startThread(input: Parameters<DesktopAPI["startThread"]>[0]) {
+    if (this.repositoryChanges.size)
+      return Promise.reject(
+        new Error("Wait for the branch switch to finish before sending a message."),
+      );
     const threadId = input.threadId ?? randomUUID();
     if (this.starting.has(threadId) || this.jobs.has(threadId))
       return Promise.reject(new Error("This thread is already running."));
@@ -538,6 +577,8 @@ export class WorkspaceService {
     messageId?: string,
     skillId?: string,
   ) {
+    if (this.repositoryChanges.size)
+      throw new Error("Wait for the branch switch to finish before sending a message.");
     if (this.updatingHarnesses.has(thread.harness))
       throw new Error("This harness is updating. Try again when the update finishes.");
     if (messageId && thread.messages.some((message) => message.id === messageId))
@@ -893,6 +934,7 @@ export class WorkspaceService {
     for (const job of this.jobs.values())
       await this.store.writeThread({ ...job.thread, status: "interrupted", activity: undefined });
     await Promise.all(jobs.map((job) => job.completion));
+    await Promise.allSettled(this.repositoryChanges.values());
     await this.store.flush();
   }
 
