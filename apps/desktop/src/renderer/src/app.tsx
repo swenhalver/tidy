@@ -1307,7 +1307,12 @@ export function App() {
                 hidden={mode !== "code"}
                 className="project-workspace"
               >
-                <div className="thread-workspace">
+                <div
+                  className="thread-workspace"
+                  data-empty-thread={
+                    !selectedThreadId || thread?.messages.length === 0 ? "" : undefined
+                  }
+                >
                   <div className="content-heading">
                     <h1>
                       {thread?.title ?? (selectedThreadId ? "Opening thread…" : "New thread")}

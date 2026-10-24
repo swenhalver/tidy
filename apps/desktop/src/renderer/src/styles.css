@@ -805,10 +805,25 @@ summary:focus-visible {
 }
 .thread-workspace {
   position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+}
+.thread-workspace[data-empty-thread]::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 64px 0 0;
+  pointer-events: none;
+  background: url("./thread-clouds.webp") bottom center / max(100%, 1100px) auto no-repeat;
+  opacity: 0.24;
+}
+@media (prefers-color-scheme: light) {
+  .thread-workspace[data-empty-thread]::before {
+    opacity: 0.12;
+  }
 }
 .content-heading {
   flex-shrink: 0;
