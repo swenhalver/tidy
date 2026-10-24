@@ -10,6 +10,7 @@ import { LocalCanvas } from "./local-canvas";
 import { DesktopShell } from "./desktop-shell";
 import { Settings } from "./settings";
 import { Conversation } from "./conversation";
+import { ThreadDesignDock } from "./thread-design-dock";
 import { ThreadSidebar, type ThreadOrderControls } from "./thread-sidebar";
 import { ApprovalRequests } from "./approval-requests";
 import { AttachmentList } from "./message-attachments";
@@ -143,6 +144,7 @@ export function App() {
   const uploads = useRef<Record<string, Promise<void>>>({});
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
+  const canvasDockHome = useRef<HTMLSpanElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<{
     original?: unknown;
@@ -1331,6 +1333,17 @@ export function App() {
                       ) ?? []
                     }
                   />
+                  {thread && api && (
+                    <ThreadDesignDock
+                      key={`canvases:${project.id}:${thread.id}`}
+                      api={api}
+                      thread={thread}
+                      designs={snapshot.designs}
+                      active={!settingsOpen && location === "local" && mode === "code"}
+                      home={canvasDockHome}
+                      onUpdate={updateLocalDesign}
+                    />
+                  )}
                   {thread?.pendingApprovals?.length && api ? (
                     <ApprovalRequests
                       key={thread.id}
@@ -1508,83 +1521,87 @@ export function App() {
                           />
                         </svg>
                       </Button>
-                      <HarnessControls
-                        api={api!}
-                        connections={harnesses}
-                        harness={selectedHarness}
-                        settings={thread?.settings ?? draft.settings ?? {}}
-                        actualModel={thread?.actualModel}
-                        usage={thread?.usage}
-                        details={currentDetails?.info}
-                        error={currentDetails?.error}
-                        loading={Boolean(currentDetails?.loading)}
-                        disabled={Boolean(
-                          running ||
-                          busy ||
-                          (thread && settingsPending[thread.id]) ||
-                          thread?.doneAt,
-                        )}
-                        onHarnessChange={
-                          thread ? undefined : (harness) => updateDraft({ harness, settings: {} })
-                        }
-                        onSettingsChange={(settings) => void changeSettings(settings)}
-                        onRefresh={() => {
-                          if (project && harnessReady)
-                            void loadHarnessDetails(project.id, selectedHarness, true);
-                        }}
-                      />
-                      <span className="composer-spacer" />
-                      <div className="composer-delivery">
-                        {running && !hasMessage ? (
-                          <Button
-                            type="button"
-                            className="composer-submit composer-stop"
-                            aria-label={
-                              queue.stopping || thread?.activity === "Stopping"
-                                ? "Stopping…"
-                                : "Stop"
-                            }
-                            title={
-                              queue.stopping || thread?.activity === "Stopping"
-                                ? "Stopping…"
-                                : "Stop"
-                            }
-                            disabled={queue.stopping || thread?.activity === "Stopping"}
-                            onClick={() => queue.stop()}
-                          >
-                            <MessageActionIcon action="stop" />
-                          </Button>
-                        ) : (
-                          <>
-                            {running && (
-                              <Button
-                                type="button"
-                                className="quiet-button composer-steer"
-                                disabled={!canSend}
-                                title="Use this instruction now (Ctrl/⌘ Enter)"
-                                onClick={() => void send("steer")}
-                              >
-                                <MessageActionIcon action="steer" />
-                                Send now
-                              </Button>
-                            )}
+                      <div className="composer-settings">
+                        <HarnessControls
+                          api={api!}
+                          connections={harnesses}
+                          harness={selectedHarness}
+                          settings={thread?.settings ?? draft.settings ?? {}}
+                          actualModel={thread?.actualModel}
+                          usage={thread?.usage}
+                          details={currentDetails?.info}
+                          error={currentDetails?.error}
+                          loading={Boolean(currentDetails?.loading)}
+                          disabled={Boolean(
+                            running ||
+                            busy ||
+                            (thread && settingsPending[thread.id]) ||
+                            thread?.doneAt,
+                          )}
+                          onHarnessChange={
+                            thread ? undefined : (harness) => updateDraft({ harness, settings: {} })
+                          }
+                          onSettingsChange={(settings) => void changeSettings(settings)}
+                          onRefresh={() => {
+                            if (project && harnessReady)
+                              void loadHarnessDetails(project.id, selectedHarness, true);
+                          }}
+                        />
+                      </div>
+                      <div className="composer-tools">
+                        <span ref={canvasDockHome} className="canvas-dock-home" />
+                        <div className="composer-delivery">
+                          {running && !hasMessage ? (
                             <Button
-                              type="submit"
-                              className="composer-submit"
-                              disabled={!canSend}
-                              aria-label={submitLabel}
-                              title={`${submitLabel} (Enter)`}
+                              type="button"
+                              className="composer-submit composer-stop"
+                              aria-label={
+                                queue.stopping || thread?.activity === "Stopping"
+                                  ? "Stopping…"
+                                  : "Stop"
+                              }
+                              title={
+                                queue.stopping || thread?.activity === "Stopping"
+                                  ? "Stopping…"
+                                  : "Stop"
+                              }
+                              disabled={queue.stopping || thread?.activity === "Stopping"}
+                              onClick={() => queue.stop()}
                             >
-                              {busy ? (
-                                <Icon name="more" size={16} />
-                              ) : (
-                                <MessageActionIcon
-                                  action={running || queue.messages.length ? "queue" : "send"}
-                                />
-                              )}
+                              <MessageActionIcon action="stop" />
                             </Button>
-                          </>
-                        )}
+                          ) : (
+                            <>
+                              {running && (
+                                <Button
+                                  type="button"
+                                  className="quiet-button composer-steer"
+                                  disabled={!canSend}
+                                  title="Use this instruction now (Ctrl/⌘ Enter)"
+                                  onClick={() => void send("steer")}
+                                >
+                                  <MessageActionIcon action="steer" />
+                                  Send now
+                                </Button>
+                              )}
+                              <Button
+                                type="submit"
+                                className="composer-submit"
+                                disabled={!canSend}
+                                aria-label={submitLabel}
+                                title={`${submitLabel} (Enter)`}
+                              >
+                                {busy ? (
+                                  <Icon name="more" size={16} />
+                                ) : (
+                                  <MessageActionIcon
+                                    action={running || queue.messages.length ? "queue" : "send"}
+                                  />
+                                )}
+                              </Button>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
                     {!harnessReady && (

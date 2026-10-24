@@ -252,6 +252,7 @@ type InspectorEdit =
       sourceNodeId: string | undefined;
     };
 type View = { zoom: number; x: number; y: number };
+export type CanvasViewportMemory = { current?: { pageId: string; view: View } };
 type NodeChanges = DesignNodeChanges;
 type CanvasTool =
   | "select"
@@ -346,6 +347,7 @@ export function FileEditor({
   externalDocument,
   active = true,
   initialPanelsOpen = false,
+  viewportMemory,
   initialToolbarPlacement = "left",
   user,
   githubReviews,
@@ -365,6 +367,7 @@ export function FileEditor({
   archived?: boolean;
   canEdit?: boolean;
   initialPanelsOpen?: boolean;
+  viewportMemory?: CanvasViewportMemory;
   initialToolbarPlacement?: EditorToolbarPlacement;
   user?: EditorUser;
   local?: boolean;
@@ -435,7 +438,13 @@ export function FileEditor({
     () => ({ ...initialDocument.content.assetMimeTypes, ...snapshot.content.assetMimeTypes }),
     [initialDocument.content.assetMimeTypes, snapshot.content.assetMimeTypes],
   );
+  const [restoredViewport] = useState(() => viewportMemory?.current);
   const [activePageId, setActivePageId] = useState(() => {
+    if (
+      restoredViewport &&
+      documentPages(initialDocument.content).some((page) => page.id === restoredViewport.pageId)
+    )
+      return restoredViewport.pageId;
     const target = initialDocument.content.nodes.find((node) => node.id === initialFocusNodeId);
     return target ? nodePageId(target) : documentPages(initialDocument.content)[0].id;
   });
@@ -1838,7 +1847,11 @@ export function FileEditor({
       const nodes = pageNodes(initialDocument.content, currentPageId);
       let target = nodes.find((node) => node.id === initialFocusNodeId);
       while (target?.parentId) target = nodes.find((node) => node.id === target!.parentId);
-      setView(fit(target?.visible ? [target] : nodes, canvas.clientWidth, canvas.clientHeight));
+      setView(
+        restoredViewport?.pageId === currentPageId
+          ? restoredViewport.view
+          : fit(target?.visible ? [target] : nodes, canvas.clientWidth, canvas.clientHeight),
+      );
       setViewportReady(true);
     }
     initializeViewport();
@@ -1846,7 +1859,11 @@ export function FileEditor({
     const observer = new ResizeObserver(initializeViewport);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [initialDocument, currentPageId, initialFocusNodeId, viewportReady]);
+  }, [initialDocument, currentPageId, initialFocusNodeId, viewportReady, restoredViewport]);
+
+  useLayoutEffect(() => {
+    if (viewportMemory && viewportReady) viewportMemory.current = { pageId: currentPageId, view };
+  }, [viewportMemory, viewportReady, currentPageId, view]);
 
   const inspectorResize = useRef({ panelsOpen, inspectorOpen, selectionDriven: false });
   useLayoutEffect(() => {
@@ -1954,9 +1971,12 @@ export function FileEditor({
       });
     }
     function onWheel(event: WheelEvent) {
+      // A containing dialog can host the editor; only overlays inside the canvas block navigation.
       if (
         event.target instanceof Element &&
-        event.target.closest("[data-canvas-control]:not([data-artboard-label]), dialog")
+        canvas?.contains(
+          event.target.closest("[data-canvas-control]:not([data-artboard-label]), dialog"),
+        )
       )
         return;
       event.preventDefault();
@@ -1978,7 +1998,9 @@ export function FileEditor({
     function onGestureStart(event: Event) {
       if (
         event.target instanceof Element &&
-        event.target.closest("[data-canvas-control]:not([data-artboard-label]), dialog")
+        canvas?.contains(
+          event.target.closest("[data-canvas-control]:not([data-artboard-label]), dialog"),
+        )
       )
         return;
       event.preventDefault();
@@ -1988,7 +2010,9 @@ export function FileEditor({
     function onGestureChange(event: Event) {
       if (
         event.target instanceof Element &&
-        event.target.closest("[data-canvas-control]:not([data-artboard-label]), dialog")
+        canvas?.contains(
+          event.target.closest("[data-canvas-control]:not([data-artboard-label]), dialog"),
+        )
       )
         return;
       event.preventDefault();
