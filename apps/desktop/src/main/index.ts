@@ -1,15 +1,6 @@
 import { version } from "../../package.json";
 import upstream from "../../upstream.json";
-import {
-  app,
-  BrowserWindow,
-  nativeTheme,
-  net,
-  protocol,
-  session,
-  safeStorage,
-  shell,
-} from "electron";
+import { app, BrowserWindow, nativeTheme, net, protocol, session, shell } from "electron";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ProjectStore } from "./workspace/project-store";
@@ -132,13 +123,16 @@ app
     const auth = new CloudAuth(
       process.env.TIDY_CLOUD_URL ?? "https://app.tidydesign.co",
       privateState,
+      // This fork has no cloud sign-in, so it never opens the macOS keychain
+      // ("Tidy Safe Storage"). Unavailable protection is the app's existing no-login path.
       {
-        available: () =>
-          safeStorage.isEncryptionAvailable() &&
-          (process.platform !== "linux" ||
-            safeStorage.getSelectedStorageBackend() !== "basic_text"),
-        encrypt: (value) => safeStorage.encryptString(value),
-        decrypt: (value) => safeStorage.decryptString(value),
+        available: () => false,
+        encrypt: () => {
+          throw new Error("Cloud sign-in is turned off in this build.");
+        },
+        decrypt: () => {
+          throw new Error("Cloud sign-in is turned off in this build.");
+        },
       },
       (url) => shell.openExternal(url),
     );
