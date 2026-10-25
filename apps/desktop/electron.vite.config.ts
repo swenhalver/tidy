@@ -44,7 +44,7 @@ export default defineConfig({
         input: {
           index: fileURLToPath(new URL("./src/main/index.ts", import.meta.url)),
           "cloud-compute-worker": fileURLToPath(
-            new URL("./src/main/cloud-compute-worker.ts", import.meta.url),
+            new URL("./src/main/cloud/cloud-compute-worker.ts", import.meta.url),
           ),
         },
         output: { banner: licenceBanner },

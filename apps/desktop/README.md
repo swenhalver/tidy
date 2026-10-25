@@ -412,6 +412,18 @@ configured before public distribution. Packaging enables the Electron security
 fuses described in [desktop security](SECURITY.md).
 
 `src/main/index.ts` owns the native window and application lifecycle.
+Native modules are grouped into `app`, `cloud`, `development`, `harnesses`, `ipc`,
+`platform`, `repository` and `workspace`. IPC adapters call the same validated
+workspace requests as the browser development gateway.
+Renderer composition and workspace bootstrap live in `src/renderer/src/app`;
+product UI lives in `features`, with its hooks, styles and unit tests alongside it.
+Reusable desktop components live in `components`, and browser development adapters
+live in `platform`. `styles.css` imports styles in cascade order.
+`src/shared/contracts` contains browser-safe boundary schemas and API types;
+`src/shared/models` contains behavior used across processes. Shared modules cannot
+import either process, and renderer modules cannot import native capabilities.
+The architecture test enforces these import boundaries.
+
 `src/renderer/` contains the browser-only React interface. The renderer is sandboxed,
 with context isolation and no Node.js integration. Navigation, new windows and
 permissions are denied except installed-font access for the font picker. The sandboxed preload exposes only typed project, design
@@ -421,8 +433,10 @@ by project and document IDs. Filesystem and harness subprocess access stays in t
 main process. Keep web database access and server credentials in `apps/web`.
 
 The root `bun typecheck`, `bun lint` and `bun run build` commands include this app.
-`bun test apps/desktop/src/main` checks project persistence, project boundaries,
+`bun test apps/desktop/src` checks project persistence, project boundaries,
 session resumption, reference context, process cancellation and event parsing.
+Tests are colocated with the modules they exercise. `tsconfig.test.json` checks
+them with Bun and Node types separately from the renderer's production types.
 Renderer bundles carry the repository's reviewed third-party licence notices;
 packaged apps also include the project licence, bundled notices and font licences.
 `bun run --cwd apps/desktop test:security` checks the built app in a real Electron

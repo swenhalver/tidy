@@ -4,11 +4,11 @@ import {
   parseWorkspaceResponse,
   type WorkspaceOperation,
   type WorkspaceResponse,
-} from "../shared/workspace-response";
-import { desktopEventSchema } from "../shared/contracts";
-import type { DesktopAPI } from "../shared/contracts";
-import { appUpdateStateSchema } from "../shared/app-updates";
-import { harnessUpdatesSchema } from "../shared/harness-updates";
+} from "../shared/contracts/workspace-response";
+import { desktopEventSchema } from "../shared/contracts/desktop";
+import type { DesktopAPI } from "../shared/contracts/desktop";
+import { appUpdateStateSchema } from "../shared/contracts/app-updates";
+import { harnessUpdatesSchema } from "../shared/contracts/harness-updates";
 import {
   cloudAccountSchema,
   cloudFilesSchema,
@@ -17,7 +17,7 @@ import {
   cloudOpenedSchema,
   cloudThumbnailSchema,
   cloudAvatarSchema,
-} from "../shared/cloud-sync";
+} from "../shared/contracts/cloud-sync";
 
 /** Invoke a workspace operation and validate its response before crossing the preload boundary. */
 async function request<Name extends WorkspaceOperation>(

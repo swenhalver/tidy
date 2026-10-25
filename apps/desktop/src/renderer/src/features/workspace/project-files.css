@@ -1,0 +1,251 @@
+.project-files {
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 32px 32px 64px;
+  overflow: auto;
+  height: 100%;
+}
+.design-browser-header h1 {
+  font-size: 30px;
+  font-weight: 600;
+}
+.file-row-location {
+  display: block;
+  color: var(--color-muted-ink);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-card-meta > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-browser-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.new-file-control {
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--color-subtle-fill);
+  border-radius: 8px;
+  background: var(--color-subtle-fill);
+}
+.new-file-button,
+.new-file-options {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border: 0;
+  padding: 8px 14px;
+  background: transparent;
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.new-file-options {
+  gap: 4px;
+  border-left: 1px solid var(--color-border);
+  padding: 8px 10px;
+}
+.new-file-options > span {
+  display: none;
+}
+.new-file-button:hover,
+.new-file-options:hover {
+  background: var(--color-hover-surface);
+}
+.local-file-preview {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.local-file-preview svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.local-file-preview > img,
+.cloud-file-placeholder > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.file-open-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  width: 100%;
+  border: 0;
+  padding: 0;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+}
+.file-open-overlay:focus-visible {
+  outline-offset: -3px;
+}
+.file-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  z-index: 20;
+  right: 12px;
+  bottom: 12px;
+  width: 28px;
+  height: 28px;
+  padding: 3px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-muted-ink);
+  cursor: pointer;
+}
+.file-actions > svg {
+  display: none;
+}
+.file-actions:hover {
+  background: var(--color-hover-surface);
+}
+.file-actions > span {
+  display: flex;
+}
+.file-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--color-muted-ink);
+}
+.file-name-input {
+  position: relative;
+  z-index: 20;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+.file-name-input:focus-visible {
+  outline: none;
+  box-shadow: 0 1px var(--color-muted-ink);
+}
+.files-empty {
+  margin-top: 48px;
+  color: var(--color-muted-ink);
+  font-size: 13px;
+}
+.file-browser-error {
+  margin-top: 20px;
+  color: var(--color-danger);
+  font-size: 13px;
+}
+.file-row-title {
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-ink);
+  text-align: left;
+  cursor: pointer;
+}
+.file-list-actions .file-actions {
+  position: static;
+}
+.file-list-actions .file-action-menu {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.file-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 500;
+}
+.file-move-dialog {
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(480px, calc(100vh - 32px));
+  padding: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-panel);
+  color: var(--color-ink);
+}
+.file-move-dialog::backdrop {
+  background: rgb(0 0 0 / 25%);
+}
+.file-move-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.file-move-heading h2 {
+  font-size: 16px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.file-move-targets {
+  display: grid;
+  gap: 4px;
+  margin-top: 16px;
+  max-height: 300px;
+  overflow: auto;
+}
+.file-move-target {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 12px;
+  background: transparent;
+  color: var(--color-ink);
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+.file-move-target:hover {
+  background: var(--color-hover-surface);
+}
+@media (max-width: 900px) {
+  .project-files {
+    padding: 28px 24px 48px;
+  }
+}
+@media (max-width: 600px) {
+  .project-files {
+    padding: 24px 16px 40px;
+  }
+}
+.project-files-container {
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.project-files-container[hidden] {
+  display: none;
+}
+
+.file-action-menu {
+  position: static;
+}

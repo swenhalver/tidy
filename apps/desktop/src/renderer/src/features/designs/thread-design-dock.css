@@ -1,0 +1,315 @@
+.thread-design-dock-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+.thread-design-dock-layer[hidden] {
+  display: none;
+}
+.canvas-dock-home {
+  display: inline-flex;
+}
+.canvas-dock-home:empty {
+  display: none;
+}
+.canvas-dock-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 8px;
+  color: var(--color-muted-ink);
+}
+.canvas-dock-count {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.canvas-dock-menu [role="menu"] {
+  width: 260px;
+  max-width: calc(100vw - 16px);
+  border-color: var(--color-border);
+  background: var(--color-panel);
+}
+.canvas-dock-menu [role="menuitemcheckbox"] {
+  min-height: 44px;
+}
+.canvas-dock-menu [role="menuitemcheckbox"] > span:last-child {
+  color: var(--color-muted-ink);
+}
+.canvas-dock-thumbnail {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 28px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: light-dark(#f4f4f4, #171717);
+  color: var(--color-muted-ink);
+}
+.canvas-dock-home[data-canvas-drop="true"] .canvas-dock-trigger {
+  outline: 1px solid var(--color-muted-ink);
+  outline-offset: 2px;
+  background: light-dark(#00000008, #ffffff08);
+}
+.thread-design-window {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  container-type: size;
+}
+.thread-design-window[data-floating="true"] {
+  z-index: 3;
+}
+.thread-design-window[hidden] {
+  display: none;
+}
+.thread-design-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: min(296px, calc(100cqw - 32px), calc((100cqh - 32px) * 1.5));
+  aspect-ratio: 1.5;
+  border-radius: 7.5% / 11.25%;
+  pointer-events: auto;
+  user-select: none;
+  transform-origin: top left;
+}
+.thread-design-peek {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: light-dark(#f4f4f4, #171717);
+  color: var(--color-ink);
+  box-shadow:
+    0 8px 24px #00000028,
+    0 0 0 1px light-dark(#00000014, #ffffff14);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  pointer-events: auto;
+  isolation: isolate;
+  animation: thread-design-appear 220ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.thread-design-frame[data-expanded="true"] {
+  visibility: hidden;
+  animation-play-state: paused;
+}
+.thread-design-frame[data-docked="true"] {
+  opacity: 0;
+  pointer-events: none;
+}
+.thread-design-frame[data-docked="true"]:not([data-moving="true"]) {
+  visibility: hidden;
+}
+.thread-design-frame[data-docked="true"]:not([data-moving="true"]) .thread-design-rim::before {
+  animation-play-state: paused;
+}
+.thread-design-frame[data-docked="true"] :is(.thread-design-close, .thread-design-resize) {
+  display: none;
+}
+.thread-design-name {
+  display: none;
+}
+.thread-design-frame[data-dragging="true"] .thread-design-peek {
+  cursor: grabbing;
+  animation-play-state: paused;
+}
+.thread-design-peek:focus-visible {
+  outline: 1px solid var(--color-muted-ink);
+  outline-offset: 6px;
+}
+.thread-design-close,
+.thread-design-resize {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-muted-ink);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.thread-design-close {
+  top: 8px;
+  right: 8px;
+  cursor: pointer;
+}
+.thread-design-resize {
+  left: 6px;
+  bottom: 6px;
+  cursor: nesw-resize;
+  touch-action: none;
+}
+.thread-design-frame:is(:hover, :focus-within) :is(.thread-design-close, .thread-design-resize),
+.thread-design-frame[data-resizing="true"] .thread-design-resize {
+  opacity: 1;
+  pointer-events: auto;
+}
+.thread-design-close:hover,
+.thread-design-resize:hover {
+  color: var(--color-ink);
+}
+.thread-design-close:focus-visible,
+.thread-design-resize:focus-visible {
+  outline: 1px solid var(--color-muted-ink);
+  outline-offset: 1px;
+}
+@media (hover: none) {
+  .thread-design-close,
+  .thread-design-resize {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+.thread-design-lens {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  border-radius: inherit;
+  background: light-dark(#f4f4f4eb, #171717eb);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+}
+.thread-design-artwork {
+  position: absolute;
+  inset: 12% 3% -8%;
+  display: block;
+}
+.thread-design-artwork > svg {
+  transform: scale(0.68);
+  transform-origin: top center;
+}
+.thread-design-rim {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  padding: 1px;
+  border-radius: inherit;
+  opacity: 0.45;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+.thread-design-rim::before {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  background: conic-gradient(
+    from 20deg,
+    #ffffff00 3%,
+    #ffffff18 12%,
+    #ffffff40 17%,
+    #ffffff05 24%,
+    #ffffff00 40%,
+    #ffffff14 53%,
+    #ffffff30 58%,
+    #ffffff05 66%,
+    #ffffff00 83%
+  );
+}
+.thread-design-window[data-working="true"] .thread-design-rim::before {
+  animation: thread-design-orbit 36s linear infinite;
+}
+.thread-design-frame:is([data-dragging="true"], [data-resizing="true"]) .thread-design-rim::before {
+  animation-play-state: paused;
+}
+.thread-design-dialog {
+  inset: 0;
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: var(--color-panel);
+  box-shadow: none;
+  transform-origin: top left;
+  pointer-events: auto;
+}
+.thread-design-dialog::backdrop {
+  background: transparent;
+}
+/* Artwork sets its own visibility. Hide the whole composited surface while keeping it measurable. */
+.thread-design-dialog:not([open]) {
+  display: block;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.thread-design-canvas {
+  width: 100%;
+  height: 100%;
+  transform-origin: top left;
+}
+.thread-design-transition-edge {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: 0;
+  pointer-events: none;
+}
+.thread-design-dialog .tidy-editor,
+.thread-design-dialog [aria-label="Design canvas"] {
+  background-color: var(--color-panel);
+}
+.thread-design-canvas [data-canvas-control],
+.thread-design-canvas .editor-panel {
+  opacity: 0;
+}
+.thread-design-dialog[data-phase="open"] .thread-design-canvas [data-canvas-control],
+.thread-design-dialog[data-phase="open"] .thread-design-canvas .editor-panel {
+  opacity: 1;
+}
+:root[data-titlebar="hidden"] .thread-design-canvas {
+  padding-top: 40px;
+  background: var(--color-panel);
+}
+:root[data-titlebar="hidden"] .thread-design-canvas::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 40px;
+  app-region: drag;
+}
+@keyframes thread-design-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes thread-design-appear {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .thread-design-peek,
+  .thread-design-window[data-working="true"] .thread-design-peek,
+  .thread-design-window[data-working="true"] .thread-design-rim::before {
+    animation: none;
+  }
+}
