@@ -228,10 +228,12 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
-  if (!quitting) updates?.stop();
-  if (quitting || !service) return;
+  if (!service) return;
+  // Cleanup ends with app.exit(); a repeated Cmd-Q must not cut thread checkpoints short.
   event.preventDefault();
+  if (quitting) return;
   quitting = "quit";
+  updates?.stop();
   // Quit looks immediate while threads are checkpointed in the background. Hiding (rather than
   // closing) keeps window-all-closed from ending the process before the checkpoints are written.
   for (const window of BrowserWindow.getAllWindows()) window.hide();
@@ -241,5 +243,11 @@ app.on("before-quit", (event) => {
   void Promise.all([
     Promise.race([Promise.allSettled([service.close(), cloud?.close()]), deadline]),
     harnessUpdates?.close().catch(() => {}),
-  ]).finally(() => app.quit());
+  ]).finally(() => {
+    // app.quit() here closes the hidden window but then emits window-all-closed instead of
+    // will-quit, so on macOS Tidy kept running without a window until another event ended it.
+    // app.exit() still runs Electron's orderly shutdown; flush renderer storage first.
+    session.defaultSession.flushStorageData();
+    app.exit(0);
+  });
 });
