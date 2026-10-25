@@ -494,6 +494,20 @@ Mac before public distribution. The [desktop beta release workflow](RELEASING.md
 can automate signing and publishing after merges to `main` once its environment
 is configured and enabled.
 
+### Choosing a display (fork)
+
+Open the window on a specific monitor with `--display`, matching a display name,
+a 1-based position in macOS's display list, a display ID, or `main`:
+
+```sh
+open -a "/Applications/Tidy Design (Paper alt).app" --args --display="S-Space"
+```
+
+`TIDY_DISPLAY` works the same way. The window is placed before it first appears, so
+it never flashes on another display. If Tidy is already running, relaunching with
+`open -n … --args --display=…` moves the existing window, because a second instance
+hands its arguments to the first and exits. Unknown displays open normally.
+
 ### Local signing (fork)
 
 `bun run --cwd apps/desktop sign:local` signs the packaged app in `release/` with this

@@ -1,6 +1,6 @@
 import { version } from "../../package.json";
 import upstream from "../../upstream.json";
-import { app, BrowserWindow, nativeTheme, net, protocol, session, shell } from "electron";
+import { app, BrowserWindow, nativeTheme, net, protocol, screen, session, shell } from "electron";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ProjectStore } from "./workspace/project-store";
@@ -16,6 +16,7 @@ import { CloudAuth } from "./cloud/cloud-auth";
 import { CloudService } from "./cloud/cloud-service";
 import { PrivateState } from "./platform/private-state";
 import { AppUpdates } from "./app/app-updates";
+import { centeredBounds, findDisplay, requestedDisplay } from "./platform/window-display";
 import { HarnessUpdates } from "./harnesses/harness-updates";
 import { invalidateHarnessDetails } from "./harnesses/harness-details";
 import {
@@ -45,12 +46,26 @@ const appIcon = app.isPackaged
       process.platform === "darwin" ? "icon-macos.png" : "icon.png",
     );
 
+/** Bounds on the display requested with --display or TIDY_DISPLAY, if it is connected. */
+function requestedBounds(argv: readonly string[]) {
+  const request = requestedDisplay(argv, process.env);
+  if (!request) return null;
+  const display = findDisplay(screen.getAllDisplays(), screen.getPrimaryDisplay(), request);
+  if (!display) {
+    console.warn(`Display "${request}" is not connected; opening on the default display.`);
+    return null;
+  }
+  return centeredBounds(display, 1200, 800);
+}
+
 async function createWindow() {
   const window = new BrowserWindow({
     title: "Tidy",
     icon: appIcon,
     width: 1200,
     height: 800,
+    // Placed before the first show, so a requested display never flashes on the main one.
+    ...requestedBounds(process.argv),
     minWidth: 640,
     minHeight: 480,
     ...(process.platform === "darwin"
@@ -89,9 +104,12 @@ app.setName("Tidy");
 app.setAboutPanelOptions({ applicationName: "Tidy", applicationVersion: version });
 const ownsWorkspace = app.requestSingleInstanceLock();
 if (!ownsWorkspace) app.quit();
-app.on("second-instance", () => {
+app.on("second-instance", (_event, argv) => {
   const window = BrowserWindow.getAllWindows()[0];
   if (window?.isMinimized()) window.restore();
+  // A relaunch with --display moves the running window to that display.
+  const bounds = window && requestedBounds(argv);
+  if (bounds) window.setBounds(bounds);
   window?.focus();
 });
 
