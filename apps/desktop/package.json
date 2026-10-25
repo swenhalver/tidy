@@ -12,6 +12,7 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "package": "bun run build && bun scripts/package.ts",
+    "sign:local": "bun scripts/sign-local.ts",
     "typecheck": "tsrs --noEmit -p tsconfig.node.json && tsrs --noEmit -p tsconfig.renderer.json",
     "lint": "eslint .",
     "test": "bun test src/main",
