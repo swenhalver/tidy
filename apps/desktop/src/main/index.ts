@@ -106,6 +106,7 @@ app.setAboutPanelOptions({ applicationName: "Tidy", applicationVersion: version 
 const ownsWorkspace = app.requestSingleInstanceLock();
 if (!ownsWorkspace) app.quit();
 app.on("second-instance", (_event, argv) => {
+  if (quitting) return;
   const window = BrowserWindow.getAllWindows()[0];
   if (window?.isMinimized()) window.restore();
   // A relaunch with --display moves the running window to that display.
@@ -231,7 +232,14 @@ app.on("before-quit", (event) => {
   if (quitting || !service) return;
   event.preventDefault();
   quitting = "quit";
-  void Promise.allSettled([service.close(), harnessUpdates?.close(), cloud?.close()]).finally(() =>
-    app.quit(),
-  );
+  // Quit looks immediate while threads are checkpointed in the background. Hiding (rather than
+  // closing) keeps window-all-closed from ending the process before the checkpoints are written.
+  for (const window of BrowserWindow.getAllWindows()) window.hide();
+  // Writes are atomic and recovery marks unfinished threads interrupted, so a stuck close
+  // cannot keep Tidy running. Active harness installers are still allowed to finish.
+  const deadline = new Promise((resolve) => setTimeout(resolve, 10_000));
+  void Promise.all([
+    Promise.race([Promise.allSettled([service.close(), cloud?.close()]), deadline]),
+    harnessUpdates?.close().catch(() => {}),
+  ]).finally(() => app.quit());
 });

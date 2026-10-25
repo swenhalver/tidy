@@ -230,8 +230,9 @@ export class HarnessUpdates {
     this.closing = true;
     clearInterval(this.timer);
     clearInterval(this.queueTimer);
+    // Discovery discards its results once closing, and its version probes and metadata
+    // requests can take tens of seconds, so quitting does not wait for an in-flight check.
     await Promise.all([...this.active.values()]);
-    await this.checking;
     this.listeners.clear();
   }
 }
