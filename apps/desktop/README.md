@@ -17,6 +17,12 @@ The tabs support arrow keys, Home and End.
 
 ## Optional cloud sync
 
+**This fork turns cloud sign-in off.** It never opens the macOS keychain: credential
+protection always reports unavailable, so Settings shows Sign in as unavailable, and
+the `EnableCookieEncryption` fuse is off because no sign-in cookies are stored. Local
+projects, threads and the local MCP are unaffected. The rest of this section describes
+upstream behaviour.
+
 Open the **Settings** gear at the bottom of the sidebar, then choose **Sign in**
 under Account. Sign-in opens the system browser and requests a separate desktop
 authorization. Settings has its own sidebar; **Back to app** returns to the same

@@ -94,7 +94,8 @@ export async function packageDesktop() {
         resetAdHocDarwinSignature: process.platform === "darwin",
         strictlyRequireAllFuses: true,
         [FuseV1Options.RunAsNode]: false,
-        [FuseV1Options.EnableCookieEncryption]: true,
+        // Cookie encryption uses the macOS keychain; this fork stores no sign-in cookies.
+        [FuseV1Options.EnableCookieEncryption]: false,
         [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
         [FuseV1Options.EnableNodeCliInspectArguments]: false,
         [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: process.platform !== "linux",
