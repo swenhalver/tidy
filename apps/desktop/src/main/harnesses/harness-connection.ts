@@ -38,6 +38,12 @@ export async function withHarnessConnection<T>(
           "--verbose",
           "--permission-mode",
           "dontAsk",
+          // Discovery runs automatically on project open, before the user trusts
+          // the folder. Skip project/local settings (hooks, env, plugins) and
+          // project MCP servers so repository code cannot execute here.
+          "--setting-sources",
+          "user",
+          "--strict-mcp-config",
         ],
     {
       cwd,
