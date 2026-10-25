@@ -4,6 +4,7 @@ import { ToastViewport } from "@tidy/ui/toast";
 import "@tidy/ui/toast.css";
 import { App } from "./app/app";
 import { HarnessUpdateNotices } from "./features/harnesses/harness-updates";
+import { AppUpdateNotice } from "./features/updates/app-update";
 import "@tidy/ui/fonts.css";
 import "./styles.css";
 
@@ -19,6 +20,7 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />
     <ToastViewport>
+      <AppUpdateNotice api={window.tidy} />
       <HarnessUpdateNotices api={window.tidy} />
     </ToastViewport>
   </StrictMode>,

@@ -118,7 +118,7 @@ app.on("browser-window-created", (_event, window) => {
         false,
       );
       assert.deepEqual(await api("updateState"), { status: "unsupported" });
-      await assert.rejects(api("installUpdate"), /No desktop update is ready/);
+      await assert.rejects(api("copyUpdatePrompt"), /No upstream update is available/);
       const exported = await evaluate(
         `${await readFile(exportProbe, "utf8")};globalThis.__tidyExportSecurityResult`,
       );
@@ -199,7 +199,7 @@ app.on("browser-window-created", (_event, window) => {
       for (const name of [
         "update-state",
         "check-updates",
-        "install-update",
+        "copy-update-prompt",
         "harness-updates",
         "install-harness-update",
         "cloud-state",

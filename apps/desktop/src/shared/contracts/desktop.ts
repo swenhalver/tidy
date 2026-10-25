@@ -158,7 +158,8 @@ export type DesktopAPI = {
   cloud?: CloudAPI;
   updateState(): Promise<AppUpdateState>;
   checkUpdates(): Promise<void>;
-  installUpdate(): Promise<void>;
+  /** Copy the main-process review prompt for the available upstream release. */
+  copyUpdatePrompt(): Promise<void>;
   onUpdate(listener: (state: AppUpdateState) => void): () => void;
   bootstrap(): Promise<Bootstrap>;
   openProject(): Promise<ProjectSnapshot | null>;

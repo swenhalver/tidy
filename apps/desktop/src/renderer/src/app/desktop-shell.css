@@ -43,10 +43,3 @@
   --desktop-titlebar-height: 0px;
 }
 
-.sidebar-update {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  margin-top: auto;
-  padding: 8px 12px;
-}

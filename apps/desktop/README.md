@@ -486,10 +486,20 @@ and Gatekeeper assessment to pass. Keep the source and build number unchanged.
 The command does not publish, install, or deploy anything. Test the DMG on another
 Mac before public distribution. The [desktop beta release workflow](RELEASING.md)
 can automate signing and publishing after merges to `main` once its environment
-is configured and enabled. Installed Apple Silicon macOS apps check at startup and every 30
-minutes; once an update is staged, click the icon at the bottom of the sidebar to
-restart and install. Older builds need one manual DMG update to get the updater.
-See [in-app updates](RELEASING.md#in-app-updates) for channels and release verification.
+is configured and enabled.
+
+### Upstream update notices (fork)
+
+This fork never downloads or installs updates. Packaged apps check upstream
+`tidydesigns/tidy` desktop releases at startup and every 30 minutes, and compare the
+newest release with the upstream commit recorded in [`upstream.json`](upstream.json).
+When the release contains commits the fork has not imported, a bottom-right notice
+offers **Copy prompt**. The main process copies a review prompt for a new T3 Code
+chat: it summarises and security-reviews the upstream changes, checks them against
+the fork's own changes and waits for approval before importing. Dismissing the notice
+hides that release until a newer one appears. Offline checks and rate limits stay
+quiet. After importing upstream changes, update `upstream.json` to the imported
+commit; the build also records the checkout path and `origin` repository for the prompt.
 Website download links remain separate work. Existing `package:desktop` remains an
 unsigned local development package, including in pull-request CI.
 
