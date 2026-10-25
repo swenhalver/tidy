@@ -2,10 +2,11 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readDesignFile } from "../../desktop/src/main/design-file";
 
-const app = new URL("..", import.meta.url).pathname;
-let directory: string, project: string, other: string;
+const app = fileURLToPath(new URL("..", import.meta.url));
+let directory: string, home: string, project: string, other: string;
 let server: ReturnType<typeof Bun.spawn<"pipe", "pipe", "pipe">>;
 let buffer = "",
   serial = 0;
@@ -46,17 +47,21 @@ async function call(name: string, args: object = {}) {
 }
 
 beforeAll(async () => {
-  const build = Bun.spawnSync(["bun", "scripts/build.ts"], { cwd: app, stderr: "pipe" });
+  const build = Bun.spawnSync([process.execPath, "scripts/build.ts"], { cwd: app, stderr: "pipe" });
   if (build.exitCode !== 0) throw new Error(build.stderr.toString());
   directory = await realpath(await mkdtemp(join(tmpdir(), "tidy-local-mcp-")));
   project = join(directory, "project");
   other = join(directory, "other");
+  home = join(directory, "home");
+  for (const folder of [".secret", "Library/Fonts", "Work/site", "Work/.cache/site"])
+    await Bun.write(join(home, folder, "README.md"), "fixture");
   await Bun.write(join(project, "README.md"), "fixture");
   await Bun.write(join(other, "README.md"), "fixture");
-  server = Bun.spawn(["bun", join(app, "dist/tidy-mcp.js")], {
+  server = Bun.spawn([process.execPath, join(app, "dist/tidy-mcp.js")], {
     cwd: directory,
     env: {
       ...process.env,
+      HOME: home,
       TIDY_PROJECT: project,
       TIDY_DESKTOP_REGISTRY: join(directory, "missing-registry.json"),
     },
@@ -224,13 +229,24 @@ test("stores assets and folders in the desktop formats", async () => {
   expect(await readdir(join(project, ".tidy/folders"))).toEqual([]);
 });
 
-test("opens another folder by absolute path but refuses relative paths and the home folder", async () => {
+test("opens ordinary folders by absolute path and refuses sensitive ones", async () => {
   const { file } = await call("create_file", { organization_id: other, name: "Elsewhere" });
   expect(await readdir(join(other, ".tidy/designs"))).toEqual([`${file.id}.json`]);
+  await call("create_file", { organization_id: join(home, "Work/site"), name: "Site" });
+  expect(await readdir(join(home, "Work/site/.tidy/designs"))).toHaveLength(1);
   await expect(call("list_files", { organization_id: "relative/path" })).rejects.toThrow();
-  await expect(
-    call("create_file", { organization_id: process.env.HOME!, name: "Nope" }),
-  ).rejects.toThrow();
+  for (const refused of [
+    home,
+    directory,
+    "/",
+    "/usr",
+    join(home, ".secret"),
+    join(home, "Library/Fonts"),
+    join(home, "Work/.cache/site"),
+  ]) {
+    await expect(call("create_file", { organization_id: refused, name: "Nope" })).rejects.toThrow();
+    await expect(readdir(join(refused, ".tidy"))).rejects.toThrow();
+  }
   await writeFile(join(directory, "note.txt"), "x");
   await expect(
     call("create_file", { organization_id: join(directory, "note.txt"), name: "Nope" }),

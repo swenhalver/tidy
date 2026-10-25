@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, realpath, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, isAbsolute, join, parse } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, isAbsolute, join, parse, relative, sep } from "node:path";
 import { z } from "zod";
 import { readLocalFile } from "../../../desktop/src/main/local-files";
 
@@ -86,6 +86,25 @@ async function projectIdentity(path: string) {
   }
 }
 
+/** Agents may name new project folders, but only ordinary ones: inside the home folder
+ * (excluding hidden folders and ~/Library), temporary folders, or external volumes. */
+async function assertProjectFolder(path: string) {
+  const inside = (parent: string) => path === parent || path.startsWith(parent + sep);
+  const home = await realpath(homedir());
+  if (inside(home)) {
+    const segments = relative(home, path).split(sep);
+    if (segments[0] === "Library" || segments.some((segment) => segment.startsWith(".")))
+      throw new Error("Choose an ordinary project folder, not a hidden or Library folder.");
+    return;
+  }
+  const temporary = await Promise.all(
+    [tmpdir(), "/tmp"].map((directory) => realpath(directory).catch(() => null)),
+  );
+  if (temporary.some((directory) => directory && inside(directory))) return;
+  if (relative("/Volumes", path).split(sep).length >= 2 && inside("/Volumes")) return;
+  throw new Error("Choose a project folder inside your home folder.");
+}
+
 export class LocalProjects {
   /** Folders opened by absolute path during this session, in addition to the registry. */
   private opened = new Map<string, LocalProject>();
@@ -130,7 +149,7 @@ export class LocalProjects {
         const path = await realpath(candidate);
         // The working directory only counts when it is already a Tidy project.
         if (candidate !== this.defaultDirectory) await realDirectory(join(path, ".tidy"));
-        return await this.open(path);
+        return await this.open(path, true);
       } catch {
         /* Fall through to the next candidate. */
       }
@@ -152,13 +171,16 @@ export class LocalProjects {
     });
   }
 
-  /** Open a folder by absolute path, creating its .tidy storage like the desktop app. */
-  async open(directory: string): Promise<LocalProject> {
+  /** Open a folder by absolute path, creating its .tidy storage like the desktop app.
+   * Folders named by an agent must pass assertProjectFolder; TIDY_PROJECT is trusted. */
+  async open(directory: string, trusted = false): Promise<LocalProject> {
     if (!isAbsolute(directory)) throw new Error("Use an absolute project folder path.");
     const path = await realpath(directory);
     if (!(await stat(path)).isDirectory()) throw new Error("Choose a project folder.");
-    if (path === parse(path).root || path === (await realpath(homedir())))
+    const home = await realpath(homedir());
+    if (path === parse(path).root || path === home || home.startsWith(path + sep))
       throw new Error("Choose a specific project folder, not your home or root folder.");
+    if (!trusted) await assertProjectFolder(path);
     const existing = [...this.opened.values()].find((project) => project.path === path);
     if (existing) return existing;
     await prepare(path);
@@ -169,8 +191,12 @@ export class LocalProjects {
 
   /** Accepts a project ID from list_organizations or an absolute folder path. */
   async resolve(organizationId: string): Promise<LocalProject> {
-    if (isAbsolute(organizationId)) return this.open(organizationId);
-    const project = (await this.list()).find((item) => item.id === organizationId);
+    const known = await this.list();
+    if (isAbsolute(organizationId)) {
+      const path = await realpath(organizationId);
+      return known.find((item) => item.path === path) ?? this.open(path);
+    }
+    const project = known.find((item) => item.id === organizationId);
     if (!project) throw new Error("Project not found. Call list_organizations for project IDs.");
     return project;
   }
