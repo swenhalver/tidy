@@ -1,7 +1,7 @@
 import { version } from "../../package.json";
+import upstream from "../../upstream.json";
 import {
   app,
-  autoUpdater,
   BrowserWindow,
   nativeTheme,
   net,
@@ -40,7 +40,7 @@ protocol.registerSchemesAsPrivileged([
 const entryURL = rendererURL(app.isPackaged, process.env.ELECTRON_RENDERER_URL);
 
 let service: WorkspaceService | undefined;
-let quitting: symbol | "quit" | undefined;
+let quitting: "quit" | undefined;
 let updates: AppUpdates | undefined;
 let harnessUpdates: HarnessUpdates | undefined;
 let cloud: CloudService | undefined;
@@ -147,22 +147,15 @@ app
     registerCloudIPC(cloud, entryURL);
     // Do not put credential reads, catch-up, or network access on the first-paint path.
     void cloud.initialize();
+    // This fork only notifies about upstream releases; it never downloads or installs them.
     updates = new AppUpdates({
-      supported: app.isPackaged && process.platform === "darwin" && process.arch === "arm64",
+      supported: app.isPackaged,
       version,
-      arch: process.arch,
-      native: autoUpdater,
-      fetch: net.fetch.bind(net),
-      async prepareInstall() {
-        if (harnessUpdates?.busy) throw new Error("Wait for harness updates to finish.");
-        const resumeWorkspace = await service!.prepareUpdate();
-        const update = Symbol("update");
-        if (!quitting) quitting = update;
-        return () => {
-          if (quitting === update) quitting = undefined;
-          resumeWorkspace();
-        };
+      fork: {
+        ...upstream,
+        ...(typeof __TIDY_BUILD_SOURCE__ === "undefined" ? {} : __TIDY_BUILD_SOURCE__),
       },
+      fetch: net.fetch.bind(net),
     });
     registerUpdateIPC(updates, entryURL);
     updates.start();
@@ -222,7 +215,6 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
-  // Update restarts still need native errors to restore the prepared workspace.
   if (!quitting) updates?.stop();
   if (quitting || !service) return;
   event.preventDefault();

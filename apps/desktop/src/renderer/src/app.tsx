@@ -42,7 +42,6 @@ import { MessageQueue } from "./message-queue";
 import { MessageActionIcon } from "./message-action-icon";
 import { useMessageQueue } from "./use-message-queue";
 import { MAX_QUEUED_MESSAGES, type MessageDelivery } from "../../shared/message-queue";
-import { AppUpdate } from "./app-update";
 import { useCloud } from "./use-cloud";
 import { CloudWorkspace } from "./cloud-workspace";
 import { SyncStatus } from "./sync-status";
@@ -1453,7 +1452,6 @@ export function App() {
           >
             <Icon name="settings" size={18} />
           </Button>
-          <AppUpdate api={api} />
         </div>
       </aside>
       <main className="workspace" hidden={settingsOpen}>

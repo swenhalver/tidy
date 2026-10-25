@@ -109,8 +109,8 @@ const api: DesktopAPI = {
   checkUpdates: async () => {
     await ipcRenderer.invoke("tidy:check-updates");
   },
-  installUpdate: async () => {
-    await ipcRenderer.invoke("tidy:install-update");
+  copyUpdatePrompt: async () => {
+    await ipcRenderer.invoke("tidy:copy-update-prompt");
   },
   onUpdate(listener) {
     const receive = (_event: Electron.IpcRendererEvent, value: unknown) =>

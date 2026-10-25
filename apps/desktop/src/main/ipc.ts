@@ -1,4 +1,11 @@
-import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
+import {
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  shell,
+  type IpcMainInvokeEvent,
+} from "electron";
 import { basename } from "node:path";
 import { WorkspaceService } from "./workspace-service";
 import { trustedRendererURL } from "./renderer-security";
@@ -133,15 +140,16 @@ export function registerHarnessUpdateIPC(updates: HarnessUpdates, rendererURL: s
   });
 }
 
-/** Expose argument-free update actions to trusted app frames and return broadcast cleanup. */
+/** Expose argument-free update actions to trusted app frames and return broadcast cleanup.
+ * The main process writes the review prompt itself; renderers cannot choose clipboard text. */
 export function registerUpdateIPC(updates: AppUpdates, rendererURL: string) {
-  for (const name of ["update-state", "check-updates", "install-update"]) {
+  for (const name of ["update-state", "check-updates", "copy-update-prompt"]) {
     ipcMain.handle(`tidy:${name}`, async (event, ...args: unknown[]) => {
       if (!trustedRequest(event, rendererURL) || args.length)
         throw new Error("Untrusted desktop request.");
       if (name === "update-state") return updates.state;
       if (name === "check-updates") return updates.check();
-      await updates.install();
+      clipboard.writeText(updates.prompt());
     });
   }
   return updates.subscribe((state) => {

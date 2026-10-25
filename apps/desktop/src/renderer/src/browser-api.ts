@@ -69,8 +69,8 @@ const api: DesktopAPI = {
   onHarnessUpdates: () => () => {},
   updateState: async () => ({ status: "unsupported" }),
   checkUpdates: async () => {},
-  installUpdate: async () => {
-    throw new Error("Updates require the installed desktop app.");
+  copyUpdatePrompt: async () => {
+    throw new Error("Update notices require the installed desktop app.");
   },
   onUpdate: () => () => {},
   bootstrap: async () => {
