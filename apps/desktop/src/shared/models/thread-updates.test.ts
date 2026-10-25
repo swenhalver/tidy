@@ -112,6 +112,55 @@ test("tool patches update rows and remove pruned logs without replacing unchange
   });
   expect(unchanged.toolActivities).toBe(result.toolActivities);
   expect(unchanged.messages).toBe(previous.messages);
+  const completed = { ...kept, status: "completed" as const };
+  const added = makeTool();
+  const updated = applyThreadPatch(unchanged, {
+    ...patch,
+    thread: { ...patch.thread, revision: 4 },
+    toolActivities: [completed, added],
+    toolActivityIds: [kept.id, added.id],
+  });
+  expect(updated.toolActivities).toEqual([completed, added]);
+  expect(updated.toolActivities![0]).toBe(completed);
+  expect(previous.toolActivities).toEqual([removed, kept]);
+});
+
+test("stream patches merge batched replacements and new messages without mutating history", () => {
+  const first = { id: "first", role: "user" as const, text: "Request" };
+  const second = { id: "second", role: "assistant" as const, text: "Working" };
+  const third = { id: "third", role: "assistant" as const, text: "More work" };
+  const previous: Thread = {
+    id: randomUUID(),
+    projectId: randomUUID(),
+    revision: 1,
+    title: "Work",
+    harness: "codex",
+    messages: [first, second],
+    status: "running",
+    designIds: [],
+    updatedAt: new Date().toISOString(),
+  };
+  const replacement = { ...second, text: "Finished" };
+  const finalThird = { ...third, text: "Also finished" };
+  for (const messages of [
+    [replacement, third],
+    [third, second, replacement, finalThird],
+    [replacement, { ...first, text: "Updated request" }],
+  ]) {
+    const result = applyThreadPatch(previous, {
+      thread: { ...previous, revision: 2 },
+      summary: summarizeThread(previous),
+      messages,
+      toolActivities: [],
+      toolActivityIds: [],
+    });
+    const expected = new Map(previous.messages.map((message) => [message.id, message]));
+    for (const message of messages) expected.set(message.id, message);
+    expect(result.messages).toEqual([...expected.values()]);
+    expect(result.messages[1]).toBe(replacement);
+    expect(previous.messages).toEqual([first, second]);
+    expect(second.text).toBe("Working");
+  }
 });
 
 test("project summaries keep early stream updates when bootstrap finishes and reject stale or foreign events", () => {

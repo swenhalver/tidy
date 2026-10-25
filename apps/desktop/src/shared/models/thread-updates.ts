@@ -32,7 +32,6 @@ export function summarizeThread(thread: Thread): ThreadSummary {
     updatedAt: thread.updatedAt,
   };
 }
-/** Preserve unchanged message/row identities as well as avoiding history copies over IPC. */
 export function applyThreadPatch(previous: Thread, patch: ThreadPatch): Thread {
   if (
     previous.id !== patch.thread.id ||
@@ -42,21 +41,33 @@ export function applyThreadPatch(previous: Thread, patch: ThreadPatch): Thread {
     return previous;
   function merge<T extends { id: string }>(existing: T[], changed: T[]) {
     if (!changed.length) return existing;
-    const updates = new Map(changed.map((item) => [item.id, item]));
+    if (changed.length === 1) {
+      const update = changed[0];
+      const index = existing.findIndex((item) => item.id === update.id);
+      if (index === -1) return [...existing, update];
+      const next = existing.slice();
+      next[index] = update;
+      return next;
+    }
+    const updates = new Map<string, T>();
+    for (const item of changed) updates.set(item.id, item);
     const next = existing.map((item) => {
       const value = updates.get(item.id);
       updates.delete(item.id);
       return value ?? item;
     });
-    return [...next, ...updates.values()];
+    for (const item of updates.values()) next.push(item);
+    return next;
   }
   const tools = merge(previous.toolActivities ?? [], patch.toolActivities);
-  const retained = new Set(patch.toolActivityIds);
-  const nextTools =
-    tools.length === patch.toolActivityIds.length &&
-    tools.every((tool, index) => tool.id === patch.toolActivityIds[index])
-      ? tools
-      : tools.filter((tool) => retained.has(tool.id));
+  let nextTools = tools;
+  if (
+    tools.length !== patch.toolActivityIds.length ||
+    tools.some((tool, index) => tool.id !== patch.toolActivityIds[index])
+  ) {
+    const retained = new Set(patch.toolActivityIds);
+    nextTools = tools.filter((tool) => retained.has(tool.id));
+  }
   return {
     ...previous,
     ...patch.thread,
