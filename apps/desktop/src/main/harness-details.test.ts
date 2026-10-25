@@ -34,7 +34,12 @@ for (const harness of ["codex", "claude"] as HarnessId[])
     if (harness === "codex") {
       expect(details.defaultEffort).toBe("high");
       expect(details.windows[0].usedPercent).toBe(25);
-    } else expect(details.windows).toEqual([]);
+    } else {
+      expect(details.windows).toEqual([]);
+      // Discovery must not run repository hooks, settings or MCP servers.
+      expect(invocation.args).toContain("--strict-mcp-config");
+      expect(invocation.args.join(" ")).toContain("--setting-sources user");
+    }
     await validateHarnessSettings(
       harness,
       directory,

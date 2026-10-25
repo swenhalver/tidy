@@ -31,7 +31,10 @@ if (metadataArgs[0] === "app-server" || metadataArgs.includes("--input-format"))
         setTimeout(resolve, Number(readFileSync("metadata-delay-ms", "utf8"))),
       );
     methods.push(method);
-    writeFileSync("capability-invocation.json", JSON.stringify({ methods, cwd: process.cwd() }));
+    writeFileSync(
+      "capability-invocation.json",
+      JSON.stringify({ methods, cwd: process.cwd(), args: metadataArgs }),
+    );
     const reply = (result) =>
       console.log(
         JSON.stringify(
