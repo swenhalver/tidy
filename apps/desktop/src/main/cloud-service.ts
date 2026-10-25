@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { realpath } from "node:fs/promises";
 import { z } from "zod";
 import {
   cloudAccountSchema,
@@ -7,8 +8,10 @@ import {
   cloudAvatarSchema,
   type CloudAPI,
   type CloudState,
+  type CloudAccount,
   type CloudOpened,
 } from "../shared/cloud-sync";
+import type { ProjectSnapshot } from "../shared/contracts";
 import { CloudAuth } from "./cloud-auth";
 import { CloudSync } from "./cloud-sync";
 import { HTTPCloudRemote, type CloudRemote } from "./cloud-remote";
@@ -30,7 +33,13 @@ export class CloudService implements CloudAPI {
   private initialized = false;
   private closed = false;
   private generation = 0;
+  private accountChanging = false;
+  private latestAccount?: CloudAccount;
+  private accountRequest = 0;
+  private accountWrites = Promise.resolve();
   private designVersions = new Map<string, string>();
+  private workspaceWork = new Map<string, Promise<ProjectSnapshot>>();
+  private workspaces = new Map<string, { accountId: string; organizationId: string }>();
   private thumbnailWork = new Map<string, Promise<string | null>>();
   private thumbnailQueue: (() => void)[] = [];
   private thumbnailCount = 0;
@@ -40,6 +49,40 @@ export class CloudService implements CloudAPI {
     private privateState: PrivateState,
     remote?: LibraryRemote,
   ) {
+    service.canAccessCloudProject = (projectId) => {
+      const binding = this.workspaces.get(projectId);
+      return Boolean(
+        !this.closed &&
+        !this.accountChanging &&
+        binding &&
+        binding.accountId === this.auth.accountId &&
+        this.latestAccount?.id === binding.accountId &&
+        this.latestAccount.organizations.some(
+          (org) => org.id === binding.organizationId && org.canEdit,
+        ),
+      );
+    };
+    service.authorizeCloudProject = async (projectId) => {
+      const binding = this.workspaces.get(projectId);
+      const generation = this.generation;
+      if (
+        this.closed ||
+        this.accountChanging ||
+        !binding ||
+        binding.accountId !== this.auth.accountId
+      )
+        throw new Error("Open this workspace with its signed-in account before running agents.");
+      const account =
+        this.latestAccount?.id === this.auth.accountId
+          ? this.latestAccount
+          : await this.account(true);
+      if (
+        generation !== this.generation ||
+        account.id !== binding.accountId ||
+        !account.organizations.some((o) => o.id === binding.organizationId && o.canEdit)
+      )
+        throw new Error("You need editing access to this workspace.");
+    };
     this.remote = remote ?? new HTTPCloudRemote(auth);
     this.sync = new CloudSync(
       service.store,
@@ -88,7 +131,7 @@ export class CloudService implements CloudAPI {
       available: this.initialized && this.enabled && this.auth.available,
       signedIn: Boolean(this.auth.accountId),
       accountId: this.auth.accountId,
-      bindings: this.sync.status,
+      bindings: this.auth.accountId && !this.accountChanging ? this.sync.status : [],
     };
   }
   private emit() {
@@ -108,24 +151,53 @@ export class CloudService implements CloudAPI {
     };
   }
   signIn() {
-    const generation = this.generation;
+    const previousAccount = this.latestAccount;
+    const previousWorkspaces = new Map(this.workspaces);
+    const generation = ++this.generation;
+    this.accountChanging = true;
+    this.latestAccount = undefined;
+    this.workspaces.clear();
+    this.workspaceWork.clear();
     const work = this.action.then(async () => {
       await this.initialize();
       if (generation !== this.generation || this.closed)
         throw new Error("Cloud sign-in was cancelled.");
       if (!this.enabled) throw new Error("Cloud sync private state could not be read.");
+      this.accountChanging = true;
+      this.workspaces.clear();
+      this.workspaceWork.clear();
+      await this.service.stopCloudThreads();
       await this.sync.stop();
-      await this.auth.signIn();
-      if (generation === this.generation && !this.closed) await this.resume();
+      try {
+        await this.auth.signIn();
+      } finally {
+        if (generation === this.generation && !this.closed) {
+          if (previousAccount?.id === this.auth.accountId) await this.account(true).catch(() => {});
+          if (generation === this.generation && !this.closed) {
+            this.accountChanging = false;
+            if (previousAccount?.id === this.auth.accountId) {
+              for (const [id, binding] of previousWorkspaces) {
+                if (binding.accountId === this.auth.accountId) this.workspaces.set(id, binding);
+              }
+            }
+            await this.resume();
+          }
+        }
+      }
     });
     this.action = work.catch(() => {});
     return work;
   }
   async signOut() {
+    this.accountChanging = true;
+    this.latestAccount = undefined;
+    this.workspaces.clear();
+    this.workspaceWork.clear();
     this.generation++;
     // Cancel an outstanding browser login immediately, then stop account-bound work.
     this.auth.cancelSignIn();
     await this.initialize();
+    await this.service.stopCloudThreads();
     await this.sync.stop();
     await this.auth.signOut();
     this.emit();
@@ -141,18 +213,40 @@ export class CloudService implements CloudAPI {
     await this.initialize();
     const key = this.cacheKey("account"),
       generation = this.generation;
-    if (cachedOnly) return cloudAccountSchema.parse(await this.privateState.read(key));
-    const account = await this.remote.account();
+    const request = cachedOnly ? this.accountRequest : ++this.accountRequest;
+    const account = cachedOnly
+      ? cloudAccountSchema.parse(await this.privateState.read(key))
+      : await this.remote.account();
     if (generation !== this.generation || account.id !== this.auth.accountId)
       throw new Error("The account changed.");
-    await this.privateState.write(key, account);
+    if (cachedOnly && this.latestAccount?.id === account.id)
+      return structuredClone(this.latestAccount);
+    if (request !== this.accountRequest)
+      throw new Error("Newer account metadata is loading. Try again.");
+    if (!cachedOnly) {
+      const write = this.accountWrites.then(async () => {
+        if (generation !== this.generation || request !== this.accountRequest || this.closed)
+          throw new Error("The account changed.");
+        await this.privateState.write(key, account);
+      });
+      this.accountWrites = write.catch(() => {});
+      await write;
+    }
+    if (generation !== this.generation || this.closed) throw new Error("The account changed.");
+    if (request !== this.accountRequest)
+      throw new Error("Newer account metadata is loading. Try again.");
+    this.latestAccount = cloudAccountSchema.parse(account);
     return account;
   }
   async catalog(organizationId: string, cachedOnly = false) {
     await this.initialize();
     const key = this.cacheKey("catalog", organizationId),
       generation = this.generation;
-    if (cachedOnly) return cloudCatalogSchema.parse(await this.privateState.read(key));
+    if (cachedOnly) {
+      const catalog = cloudCatalogSchema.parse(await this.privateState.read(key));
+      if (generation !== this.generation || this.closed) throw new Error("The account changed.");
+      return catalog;
+    }
     const catalog = await this.remote.catalog(organizationId);
     if (generation !== this.generation) throw new Error("The account changed.");
     const cached = cloudCatalogSchema.safeParse(await this.privateState.read(key));
@@ -164,17 +258,46 @@ export class CloudService implements CloudAPI {
         ),
       );
     }
+    if (generation !== this.generation || this.closed) throw new Error("The account changed.");
     await this.privateState.write(key, catalog);
+    if (generation !== this.generation || this.closed) throw new Error("The account changed.");
     return catalog;
   }
+  async openWorkspace(organizationId: string) {
+    const generation = this.generation;
+    await this.initialize();
+    const key = this.cacheKey("workspace", organizationId);
+    const pending = this.workspaceWork.get(key);
+    if (pending) return pending;
+    const work = (async () => {
+      const project = await this.workspace(organizationId);
+      await this.service.assertProjectAccess(project.id);
+      const snapshot = await this.service.store.snapshot(project.id);
+      await this.service.assertProjectAccess(project.id);
+      if (generation !== this.generation || this.closed) throw new Error("Cloud sync is stopped.");
+      return { ...snapshot, threads: this.service.withLiveThreads(project.id, snapshot.threads) };
+    })();
+    this.workspaceWork.set(key, work);
+    void work
+      .finally(() => {
+        if (this.workspaceWork.get(key) === work) this.workspaceWork.delete(key);
+      })
+      .catch(() => {});
+    return work;
+  }
   private async workspace(organizationId: string) {
+    if (this.closed || this.accountChanging) throw new Error("Cloud sync is stopped.");
+    const generation = this.generation;
     const account = await this.account(true).catch(() => this.account());
     const organization = account.organizations.find((o) => o.id === organizationId && o.canEdit);
     if (!organization) throw new Error("You need editing access to this workspace.");
     const key = this.cacheKey("workspace", organizationId).slice("workspace-".length);
-    const path = await this.privateState.workspace(key);
+    const path = await realpath(await this.privateState.workspace(key));
     const existing = this.service.store.projects.find((p) => p.path === path && p.cloud);
-    const project = existing ?? (await this.service.store.open(path, organization.name)).project;
+    const project = existing ?? (await this.service.store.register(path, organization.name));
+    if (generation !== this.generation || this.closed || account.id !== this.auth.accountId)
+      throw new Error("Cloud sync is stopped.");
+    this.workspaces.set(project.id, { accountId: account.id, organizationId });
     await this.service.observe(project.id);
     return project;
   }
@@ -258,6 +381,7 @@ export class CloudService implements CloudAPI {
   }
   keepBoth(organizationId: string, projectId: string, designId: string) {
     return this.fileAction(async () => {
+      await this.service.assertProjectAccess(projectId);
       const binding = this.sync.status.find(
         (b) => b.projectId === projectId && b.designId === designId && b.status === "conflict",
       );
@@ -274,6 +398,7 @@ export class CloudService implements CloudAPI {
         name: `${local.name.slice(0, 106)} (local copy)`,
       });
       await this.sync.disconnect(projectId, designId);
+      await this.service.assertProjectAccess(projectId);
       await this.sync.connectLocal(projectId, designId, organizationId);
       await this.rememberFile(
         organizationId,
@@ -286,6 +411,7 @@ export class CloudService implements CloudAPI {
     });
   }
   async focus(projectId?: string, designId?: string) {
+    if (projectId) await this.service.assertProjectAccess(projectId);
     this.sync.focus(projectId, designId);
   }
   setForeground(value: boolean) {
@@ -352,6 +478,7 @@ export class CloudService implements CloudAPI {
     const work = this.action.then(async () => {
       await this.initialize();
       if (this.closed || generation !== this.generation) throw new Error("Cloud sync is stopped.");
+      await this.service.assertProjectAccess(projectId);
       await this.sync.open(projectId, fileId, name);
       await this.service.observe(projectId);
     });
@@ -359,7 +486,10 @@ export class CloudService implements CloudAPI {
     await work;
   }
   async disconnect(projectId: string, designId: string) {
-    const work = this.action.then(() => this.sync.disconnect(projectId, designId));
+    const work = this.action.then(async () => {
+      await this.service.assertProjectAccess(projectId);
+      await this.sync.disconnect(projectId, designId);
+    });
     this.action = work.catch(() => {});
     await work;
   }
@@ -368,6 +498,7 @@ export class CloudService implements CloudAPI {
     const work = this.action.then(async () => {
       await this.initialize();
       if (this.closed || generation !== this.generation) throw new Error("Cloud sync is stopped.");
+      await this.service.assertProjectAccess(projectId);
       await this.sync.connectLocal(projectId, designId, organizationId);
       await this.rememberFile(
         organizationId,
