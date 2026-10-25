@@ -84,7 +84,11 @@ export function AppUpdateNotice({ api }: { api: DesktopAPI | undefined }) {
         </div>
         <Button
           className="harness-update-install"
-          aria-label={`Copy review prompt for Tidy ${version}`}
+          aria-label={
+            copy === "copied"
+              ? `Copied review prompt for Tidy ${version}`
+              : `Copy review prompt for Tidy ${version}`
+          }
           onClick={() => {
             if (!api) return;
             setCopy("copied");
