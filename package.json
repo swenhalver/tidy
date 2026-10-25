@@ -43,6 +43,7 @@
     "test:multiplayer:browser": "bun run --cwd apps/web test:multiplayer:browser",
     "types:worker": "bun run --cwd apps/web types:worker",
     "build:gpt-plugin": "turbo run build --filter=@tidy/gpt-plugin",
+    "build:local-mcp": "bun run --cwd apps/local-mcp build",
     "dev:gpt-plugin": "bun run --cwd apps/gpt-plugin dev",
     "zip:gpt-plugin": "bun run --cwd apps/gpt-plugin zip",
     "test:runtime:db": "node apps/web/scripts/test-account-controls.mjs --runtime",

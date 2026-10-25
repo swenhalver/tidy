@@ -1,0 +1,26 @@
+{
+  "name": "@tidy/local-mcp",
+  "version": "0.1.0",
+  "description": "Tidy's MCP design tools as a local stdio server for desktop projects",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "start": "bun dist/tidy-mcp.js",
+    "typecheck": "tsrs --noEmit",
+    "test": "bun test",
+    "typecheck:tsc": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.3.1",
+    "@tidy/design": "workspace:*",
+    "@tidy/editor": "workspace:*",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/node": "^24",
+    "typescript": "^5"
+  }
+}
