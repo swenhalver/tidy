@@ -266,6 +266,19 @@ test("custom installations still alert but cannot start an unknown updater", asy
   expect(commands).toHaveLength(0);
 });
 
+test("quit does not wait for an in-flight update check", async () => {
+  const { updater, setLatest } = fixture();
+  setLatest(() => new Promise<never>(() => {}));
+  void updater.check(true);
+  let closed = false;
+  void updater.close().then(() => {
+    closed = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(closed).toBe(true);
+  expect(updater.state).toEqual([]);
+});
+
 test("quit cancels queued updates and waits for an active installer to finish", async () => {
   const { updater, installed, setRun, commands } = fixture();
   let finish!: () => void;
