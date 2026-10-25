@@ -33,6 +33,9 @@
     "test": {
       "dependsOn": ["^test"]
     },
+    "@tidy/local-mcp#build": {
+      "cache": false
+    },
     "@tidy/web#typecheck": {
       "dependsOn": ["^typecheck", "@tidy/gpt-plugin#build"],
       "outputs": [".next/types/**", "next-env.d.ts"]
