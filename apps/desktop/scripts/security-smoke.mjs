@@ -317,108 +317,45 @@ app.on("browser-window-created", (_event, window) => {
       );
       page.send("tidy:harness-updates", []);
 
-      // Exercise renderer update-state rendering and its sidebar action with synthetic events.
-      assert.equal(await evaluate("document.querySelector('.app-update-button')===null"), true);
-      for (const status of ["checking", "downloading", "installing"]) {
-        page.send("tidy:update", { status, version: "0.1.0-beta.999" });
-        await wait("document.querySelector('.app-update-button[aria-busy=\"true\"]')!==null");
-        // Native keyboard/focus assertions need the primary renderer to own focus.
-        window.focus();
-        page.focus();
-        assert.equal(
-          await evaluate(
-            "document.querySelector('.app-update-button').getAttribute('aria-disabled')",
-          ),
-          "true",
-        );
-        // Busy controls remain focusable so their status can be inspected without activating them.
-        await evaluate(
-          "document.querySelector('.app-update-button').focus();document.querySelector('.app-update-button').click();true",
-        );
-        await wait(
-          "getComputedStyle(document.querySelector('.app-update-tooltip')).visibility==='visible'",
-        );
-        assert.equal(
-          await evaluate("document.querySelector('.app-update-button').getAttribute('aria-busy')"),
-          "true",
-        );
-        page.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
-        page.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
-        await wait(
-          "getComputedStyle(document.querySelector('.app-update-tooltip')).visibility==='hidden'",
-        );
-        await evaluate("document.querySelector('.app-update-button').blur();true");
-        assert.equal(
-          await evaluate(`(() => {
-          const icon=document.querySelector('.app-update-spinning');
-          return Boolean(icon) && getComputedStyle(icon).animationName ===
-            (matchMedia('(prefers-reduced-motion: reduce)').matches ? 'none' : 'app-update-spin');
-        })()`),
-          true,
-        );
-      }
-      page.send("tidy:update", { status: "ready", version: "0.1.0-beta.999" });
-      await wait("document.querySelector('.app-update-button[aria-busy=\"false\"]')!==null");
+      // Exercise the upstream release notice with synthetic events. The main process has no
+      // available release here, so copying must fail safely without writing the clipboard.
+      const notice = "document.querySelector('[aria-label=\"Upstream update\"]')";
+      assert.equal(await evaluate(`${notice}===null`), true);
+      page.send("tidy:update", {
+        status: "available",
+        version: "0.1.0-beta.999",
+        tag: "v0.1.0-beta.999",
+        commits: 3,
+      });
+      await wait(`${notice}!==null`);
       assert.equal(
-        await evaluate(`(() => {
-          const button=document.querySelector('.app-update-button');
-          const sidebar=document.querySelector('.desktop-navigation');
-          return button.getAttribute('aria-label')==='Restart to update' &&
-            document.getElementById(button.getAttribute('aria-describedby')).textContent==='Restart to update to Tidy 0.1.0-beta.999' &&
-            document.querySelector('.app-update-ready')!==null &&
-            button.getBoundingClientRect().bottom <= sidebar.getBoundingClientRect().bottom &&
-            sidebar.getBoundingClientRect().bottom - button.getBoundingClientRect().bottom < 20;
-        })()`),
-        true,
+        await evaluate(`${notice}.querySelector('.harness-update-detail').textContent`),
+        "3 upstream commits to review",
       );
-      const updateFooterHeight = await evaluate(
-        "document.querySelector('.sidebar-update').offsetHeight",
+      await evaluate(
+        "document.querySelector('[aria-label=\"Copy review prompt for Tidy 0.1.0-beta.999\"]').click();true",
       );
-      const updateBounds = await evaluate(`(() => {
-        const rect=document.querySelector('.app-update-button').getBoundingClientRect();
-        return {x:Math.round(rect.x+rect.width/2),y:Math.round(rect.y+rect.height/2)};
-      })()`);
-      // Escape may have dismissed an existing hover; start outside before entering again.
-      page.sendInputEvent({ type: "mouseMove", x: 350, y: 100 });
-      await wait("!document.querySelector('.app-update-control').matches(':hover')");
-      page.sendInputEvent({ type: "mouseMove", ...updateBounds });
-      await wait(
-        "getComputedStyle(document.querySelector('.app-update-tooltip')).visibility==='visible'",
-      );
-      page.sendInputEvent({ type: "mouseMove", x: 350, y: 100 });
-      await wait(
-        "getComputedStyle(document.querySelector('.app-update-tooltip')).visibility==='hidden'",
-      );
-      // There is intentionally no staged native update: installation must fail safely and retry.
-      await evaluate("document.querySelector('.app-update-button').click();true");
-      await wait("document.querySelector('.app-update-warning')!==null");
-      assert.equal(
-        await evaluate(
-          "document.querySelector('.app-update-button').getAttribute('aria-disabled')",
-        ),
-        "false",
-      );
-      assert.equal(await evaluate("document.querySelector('.app-update-error')===null"), true);
-      assert.equal(
-        await evaluate("document.querySelector('.sidebar-update').offsetHeight"),
-        updateFooterHeight,
-      );
-      assert.equal(
-        await evaluate(
-          "getComputedStyle(document.querySelector('.app-update-tooltip')).visibility",
-        ),
-        "hidden",
-      );
-      await evaluate("document.querySelector('.app-update-button').focus();true");
-      await wait(
-        "getComputedStyle(document.querySelector('.app-update-tooltip')).visibility==='visible'",
-      );
+      await wait(`${notice}.querySelector('[role=alert]')!==null`);
       assert.match(
-        await evaluate("document.querySelector('.app-update-tooltip').textContent"),
-        /Couldn’t restart.*retry/,
+        await evaluate(`${notice}.querySelector('[role=alert]').textContent`),
+        /Couldn’t copy the prompt/,
+      );
+      await evaluate(
+        "document.querySelector('[aria-label=\"Dismiss Tidy 0.1.0-beta.999\"]').click();true",
+      );
+      await wait(`${notice}===null`);
+      // A dismissed release stays hidden; a newer one is announced again.
+      page.send("tidy:update", { status: "available", version: "0.1.0-beta.999", commits: 3 });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(await evaluate(`${notice}===null`), true);
+      page.send("tidy:update", { status: "available", version: "0.1.0-beta.1000", commits: 1 });
+      await wait(`${notice}!==null`);
+      assert.equal(
+        await evaluate(`${notice}.querySelector('.harness-update-detail').textContent`),
+        "1 upstream commit to review",
       );
       page.send("tidy:update", { status: "idle" });
-      await wait("document.querySelector('.app-update-button')===null");
+      await wait(`${notice}===null`);
 
       // A real canvas must still work under the restricted custom protocol.
       if (process.platform === "darwin") {
