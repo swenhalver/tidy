@@ -63,7 +63,7 @@ function TurnButton({
   return <Button {...props} aria-label={`Jump to turn ${index + 1}: ${label}`} />;
 }
 
-export function Conversation({
+export const Conversation = memo(function Conversation({
   thread,
   identity,
   api,
@@ -353,4 +353,4 @@ export function Conversation({
       ) : null}
     </div>
   );
-}
+});

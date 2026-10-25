@@ -8,7 +8,10 @@ const licenceBanner = (chunk: { modules: Record<string, unknown> }) =>
   bundleLicenseBannerForInputs(Object.keys(chunk.modules));
 
 export const rendererConfig = {
-  worker: { format: "es", rolldownOptions: { output: { banner: licenceBanner } } },
+  worker: {
+    format: "es",
+    rolldownOptions: { output: { banner: licenceBanner, comments: { legal: true } } },
+  },
   plugins: [
     react(),
     tailwindcss(),
@@ -28,8 +31,10 @@ export const rendererConfig = {
     strictPort: true,
   },
   build: {
+    minify: true,
     rolldownOptions: {
       output: {
+        comments: { legal: true },
         banner: (chunk) => bundleLicenseBannerForInputs(Object.keys(chunk.modules)),
       },
     },
