@@ -494,6 +494,14 @@ Mac before public distribution. The [desktop beta release workflow](RELEASING.md
 can automate signing and publishing after merges to `main` once its environment
 is configured and enabled.
 
+### Local signing (fork)
+
+`bun run --cwd apps/desktop sign:local` signs the packaged app in `release/` with this
+Mac's Apple Development identity (or `TIDY_LOCAL_SIGN_IDENTITY`), using the release
+signing options without notarization. Every rebuild then keeps the same code identity,
+so permissions macOS grants to Tidy persist. Run it after `bun run package:desktop`;
+the result is for this Mac only.
+
 ### Upstream update notices (fork)
 
 This fork never downloads or installs updates. Packaged apps check upstream
