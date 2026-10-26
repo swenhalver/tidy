@@ -7,8 +7,8 @@ import {
   parseDesignDocument,
   type DesignDocument,
 } from "@tidy/design/document";
-import { readDesignFile } from "../../../desktop/src/main/design-file";
-import { readLocalFile } from "../../../desktop/src/main/local-files";
+import { readDesignFile } from "../../../desktop/src/main/workspace/design-file";
+import { readLocalFile } from "../../../desktop/src/main/platform/local-files";
 import { LocalProjects, type LocalProject } from "./projects";
 
 const uuid = z.uuid();

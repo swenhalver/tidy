@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readDesignFile } from "../../desktop/src/main/design-file";
+import { readDesignFile } from "../../desktop/src/main/workspace/design-file";
 
 const app = fileURLToPath(new URL("..", import.meta.url));
 let directory: string, home: string, project: string, other: string;

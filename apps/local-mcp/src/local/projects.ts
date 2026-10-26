@@ -3,7 +3,7 @@ import { lstat, mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, isAbsolute, join, parse, relative, sep } from "node:path";
 import { z } from "zod";
-import { readLocalFile } from "../../../desktop/src/main/local-files";
+import { readLocalFile } from "../../../desktop/src/main/platform/local-files";
 
 export type LocalProject = { id: string; name: string; path: string };
 
