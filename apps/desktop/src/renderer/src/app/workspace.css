@@ -1,14 +1,6 @@
-.desktop-sidebar-hidden {
-  grid-template-columns: minmax(0, 1fr);
-}
 .desktop-sidebar-hidden > .workspace,
 .desktop-sidebar-hidden > .error-banner {
   grid-column: 1;
-}
-.sidebar-mode-content:not([hidden]) {
-  display: flex;
-  flex: 1;
-  min-height: 0;
 }
 .design-navigation:not([hidden]) {
   display: flex;
@@ -89,63 +81,45 @@
   gap: 6px;
 }
 
-.workspace-header {
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
-  gap: 6px;
-  padding: 6px 8px 8px;
+:root[data-titlebar="hidden"] .desktop-navigation:not(.settings-navigation) > .workspace-header {
+  margin-top: calc(-1 * var(--desktop-titlebar-height));
+  padding-top: 3px;
+}
+:root[data-titlebar="hidden"] .workspace-project-row {
+  position: relative;
+  z-index: 2;
+  padding-left: 80px;
+  app-region: no-drag;
+}
+:root[data-titlebar="hidden"][data-window-fullscreen] .workspace-project-row {
+  padding-left: 0;
 }
 
-.workspace-tabs {
-  display: flex;
-  width: 100%;
-  gap: 4px;
+.desktop-sidebar-hidden .thread-heading {
+  padding-left: 48px;
 }
-.code-mode-icon {
-  flex-shrink: 0;
+:root[data-titlebar="hidden"]
+  .desktop-sidebar-hidden:has(#workspace-panel-code:not([hidden]))
+  .desktop-sidebar-reopen {
+  top: 6px;
+  left: 84px;
 }
-
-.workspace-tab {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 6px;
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 7px 8px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: var(--color-muted-ink);
-  background: transparent;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 20px;
-  white-space: nowrap;
-  cursor: pointer;
+:root[data-titlebar="hidden"] .desktop-sidebar-hidden .thread-heading {
+  padding-left: 128px;
 }
-
-.workspace-tab[aria-selected="true"] {
-  color: var(--color-ink);
-  background: var(--color-subtle-fill);
+:root[data-titlebar="hidden"][data-window-fullscreen]
+  .desktop-sidebar-hidden:has(#workspace-panel-code:not([hidden]))
+  .desktop-sidebar-reopen {
+  left: 4px;
 }
-
-@media (hover: hover) {
-  .workspace-tab:hover {
-    color: var(--color-ink);
-    background: var(--color-hover-surface);
-  }
-
-  .workspace-tab[aria-selected="true"]:hover {
-    background: var(--color-subtle-fill);
-  }
+:root[data-titlebar="hidden"][data-window-fullscreen] .desktop-sidebar-hidden .thread-heading {
+  padding-left: 48px;
 }
-
-.workspace-tab:focus-visible,
-.workspace-panel:focus-visible {
-  outline: 2px solid var(--color-ink);
-  outline-offset: -2px;
+.desktop-sidebar-hidden:has(#workspace-panel-design:not([hidden])) .desktop-sidebar-reopen {
+  top: calc(var(--desktop-titlebar-height) + 39px);
+}
+.desktop-sidebar-hidden:not(.desktop-canvas-focused) .design-browser-header {
+  padding-left: 16px;
 }
 
 .workspace {
@@ -156,8 +130,7 @@
   min-height: 0;
 }
 
-.project-home h1,
-.content-heading h1 {
+.project-home h1 {
   margin: 0;
   font-weight: 400;
   line-height: 0.98;
@@ -226,47 +199,6 @@ summary:focus-visible {
   border-radius: 5px;
   cursor: pointer;
 }
-.project-trigger {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 34px;
-  max-width: 100%;
-  border: 0;
-  border-radius: 6px;
-  padding: 6px 8px;
-  background: transparent;
-  color: var(--color-ink);
-  text-align: left;
-  font-size: 13px;
-  cursor: pointer;
-}
-.project-trigger {
-  width: 100%;
-  min-width: 0;
-}
-.project-trigger > svg {
-  flex-shrink: 0;
-}
-.project-trigger > span:not([aria-hidden="true"]) {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.project-picker {
-  min-width: 0;
-  width: 100%;
-}
-.workspace-menu {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.workspace-menu [role="menuitemradio"] {
-  padding: 8px 10px;
-}
 .recent-projects {
   display: flex;
   flex-direction: column;
@@ -301,14 +233,6 @@ summary:focus-visible {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
 }
-.project-sidebar {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  flex: 1;
-  padding: 0 8px 8px;
-}
 .sidebar-heading {
   display: flex;
   align-items: center;
@@ -317,12 +241,6 @@ summary:focus-visible {
   padding-left: 8px;
   font-size: 12px;
   font-weight: 500;
-}
-.sidebar-list {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding-top: 8px;
 }
 .sidebar-item {
   display: block;
@@ -342,4 +260,9 @@ summary:focus-visible {
 }
 .sidebar-item.selected {
   background: var(--color-subtle-fill);
+}
+
+.workspace-panel:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: -2px;
 }

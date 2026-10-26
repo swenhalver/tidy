@@ -35,7 +35,6 @@
 }
 @media (hover: hover) {
   .quiet-button:hover,
-  .project-trigger:hover,
   .recent-project:hover,
   .reference-option:hover {
     background: var(--color-hover-surface);
@@ -50,11 +49,8 @@
 }
 @media (max-width: 800px) {
   .desktop {
-    --project-sidebar-width: 180px;
+    --project-sidebar-width: 220px;
     --chat-gutter: 40px;
-  }
-  .content-heading {
-    padding-inline: 20px;
   }
   .connection-help {
     flex-direction: column;

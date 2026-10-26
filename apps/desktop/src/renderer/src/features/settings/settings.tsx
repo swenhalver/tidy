@@ -13,10 +13,10 @@ export function Settings({ cloud, onBack }: { cloud: CloudConnection; onBack(): 
     <>
       <aside
         id="desktop-settings-navigation"
-        className="desktop-navigation settings-navigation"
+        className="desktop-navigation col-start-1 row-span-full flex min-h-0 min-w-0 flex-col border-r border-border bg-(--desktop-navigation-surface) settings-navigation"
         aria-label="Settings"
       >
-        <div className="workspace-header">
+        <div className="workspace-header flex shrink-0 flex-col gap-1.5 px-1 pt-1 pb-2">
           <Button ref={back} className="settings-back" onClick={onBack}>
             <Icon name="back" size={16} />
             Back to app
@@ -35,11 +35,11 @@ export function Settings({ cloud, onBack }: { cloud: CloudConnection; onBack(): 
           <section className="settings-account" aria-labelledby="settings-account-title">
             <div className="settings-account-row" id="settings-account">
               <div>
-                <h2 id="settings-account-title">Tidy account</h2>
+                <h2 id="settings-account-title">Sync</h2>
                 <p>
                   {signedIn
-                    ? "Connected. Designs added to a workspace sync automatically."
-                    : "Sign in to access your workspaces and sync designs across devices."}
+                    ? "Workspace designs sync automatically."
+                    : "Sign in to sync workspace designs across devices."}
                 </p>
               </div>
               <div className="settings-account-actions">

@@ -1,3 +1,9 @@
+import {
+  codeFontClassName,
+  desktopNavigationClassName,
+  codeStatusClassName,
+  codeSubmitClassName,
+} from "../styles/code-ui";
 import { z } from "zod";
 import { useSessionState } from "./session-state";
 import { selectionSchema } from "./navigation-state";
@@ -22,7 +28,7 @@ import { Button } from "@tidy/ui/button";
 import { SelectMenu } from "@tidy/ui/select-menu";
 import { Icon } from "@tidy/editor/components/ui/icon";
 import { LocalCanvas } from "../features/designs/local-canvas";
-import { DesktopShell } from "./desktop-shell";
+import { DesktopShell, SidebarToggle } from "./desktop-shell";
 import { Settings } from "../features/settings/settings";
 import { Conversation } from "../features/threads/conversation";
 import { ThreadDesignDock } from "../features/designs/thread-design-dock";
@@ -101,6 +107,7 @@ export function App() {
     hasCloudAPI: Boolean(api?.cloud),
   });
   const [cloudCanvas, setCloudCanvas] = useState(false);
+  const [threadQueries, setThreadQueries] = useState<Record<string, string>>({});
   const [mode, setMode] = useSessionState<Mode>("mode", z.enum(["design", "code"]), "design");
   const [designNavigation, setDesignNavigation] = useState<HTMLElement | null>(null);
   const [opening, setOpening] = useState(false);
@@ -994,7 +1001,7 @@ export function App() {
 
   const toggleThreadDone = useCallback(
     async (item: ThreadSummary) => {
-      if (!api || !project || updatingDone[item.id] || item.status === "running") return;
+      if (!api || !project || updatingDone[item.id]) return;
       const projectId = project.id;
       const next = {
         ...item,
@@ -1085,9 +1092,9 @@ export function App() {
 
   function onTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     const next =
-      event.key === "ArrowRight"
+      event.key === "ArrowRight" || event.key === "ArrowDown"
         ? (index + 1) % modes.length
-        : event.key === "ArrowLeft"
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
           ? (index + modes.length - 1) % modes.length
           : event.key === "Home"
             ? 0
@@ -1100,12 +1107,17 @@ export function App() {
     document.getElementById(`workspace-tab-${modes[next].id}`)?.focus();
   }
 
+  const selectedThreadLoaded =
+    thread?.status === "completed" &&
+    (selectedSummary?.messageCount === undefined ||
+      thread.messages.length === selectedSummary.messageCount);
   const renderThread = useCallback(
     (item: ThreadSummary, orderControls?: ThreadOrderControls) => (
       <ThreadCard
         thread={item}
         orderControls={orderControls}
-        selected={selectedThreadId === item.id}
+        selected={mode === "code" && !settingsOpen && selectedThreadId === item.id}
+        loaded={selectedThreadId === item.id && selectedThreadLoaded}
         now={now}
         pending={Boolean(updatingDone[item.id] || settingsPending[item.id])}
         onSelect={() => selectThread(project!.id, item.id)}
@@ -1121,6 +1133,9 @@ export function App() {
     ),
     [
       selectedThreadId,
+      selectedThreadLoaded,
+      mode,
+      settingsOpen,
       now,
       updatingDone,
       settingsPending,
@@ -1223,101 +1238,182 @@ export function App() {
     <DesktopShell canvasFocused={!settingsOpen && canvasFocused} settingsOpen={settingsOpen}>
       <aside
         id="desktop-navigation"
-        className="desktop-navigation"
+        className={`desktop-navigation col-start-1 row-span-full flex min-h-0 min-w-0 flex-col border-r border-border bg-(--desktop-navigation-surface) ${desktopNavigationClassName}`}
         aria-label="Project workspace"
         hidden={settingsOpen}
       >
-        <header className="workspace-header">
-          <div className="project-picker" title={project?.name}>
-            {(project || cloud.account) && (
-              <SelectMenu
-                value={
-                  target?.kind === "cloud" ? `cloud:${target.organizationId}` : (project?.id ?? "")
-                }
-                options={[
-                  ...(target?.kind === "cloud" && !cloudOrganizationId
-                    ? [
-                        {
-                          value: `cloud:${target.organizationId}`,
-                          label: cloud.error ? "Workspace unavailable" : "Opening workspace…",
-                          description: "Cloud",
-                          icon: <Icon name="cloud" size={16} className="text-secondary-ink" />,
-                        },
-                      ]
-                    : []),
-                  ...(cloud.account?.organizations
-                    .filter((o) => o.canEdit)
-                    .map((o) => ({
-                      value: `cloud:${o.id}`,
-                      label: o.name,
-                      description: "Cloud",
-                      icon: <Icon name="cloud" size={16} className="text-secondary-ink" />,
-                    })) ?? []),
-                  ...projects.map((item) => ({
-                    value: item.id,
-                    label: item.name,
-                    description: "Local",
-                    icon: <Icon name="computer" size={16} className="text-secondary-ink" />,
-                  })),
-                  { value: "open", label: "Open project…" },
-                ]}
-                label="Workspace"
-                disabled={opening}
-                onChange={(value) => {
-                  if (value.startsWith("cloud:")) selectCloudWorkspace(value.slice(6));
-                  else void chooseProject(value === "open" ? undefined : value);
-                }}
-                triggerClassName="project-trigger"
-                menuClassName="workspace-menu"
-                showSelectedIcon
-              />
-            )}
+        <header className="workspace-header flex shrink-0 flex-col gap-1.5 px-1 pt-1 pb-2">
+          <div className="workspace-project-row flex items-center gap-0 pr-1">
+            <SidebarToggle />
+            <div className="project-picker min-w-0 w-full flex-1" title={project?.name}>
+              {(project || cloud.account) && (
+                <SelectMenu
+                  value={
+                    target?.kind === "cloud"
+                      ? `cloud:${target.organizationId}`
+                      : (project?.id ?? "")
+                  }
+                  options={[
+                    ...(target?.kind === "cloud" && !cloudOrganizationId
+                      ? [
+                          {
+                            value: `cloud:${target.organizationId}`,
+                            label: cloud.error ? "Workspace unavailable" : "Opening workspace…",
+                            description: "Cloud",
+                            icon: <Icon name="cloud" size={16} className="text-secondary-ink" />,
+                          },
+                        ]
+                      : []),
+                    ...(cloud.account?.organizations
+                      .filter((o) => o.canEdit)
+                      .map((o) => ({
+                        value: `cloud:${o.id}`,
+                        label: o.name,
+                        description: "Cloud",
+                        icon: <Icon name="cloud" size={16} className="text-secondary-ink" />,
+                      })) ?? []),
+                    ...projects.map((item) => ({
+                      value: item.id,
+                      label: item.name,
+                      description: "Local",
+                      icon: <Icon name="computer" size={16} className="text-secondary-ink" />,
+                    })),
+                    { value: "open", label: "Open project…" },
+                  ]}
+                  label="Workspace"
+                  disabled={opening}
+                  onChange={(value) => {
+                    if (value.startsWith("cloud:")) selectCloudWorkspace(value.slice(6));
+                    else void chooseProject(value === "open" ? undefined : value);
+                  }}
+                  triggerClassName="project-trigger flex min-h-[34px] w-fit min-w-0 max-w-full cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent py-1.5 pr-2 pl-[3px] text-left text-[13px] leading-[1.5] text-ink hover:bg-hover-surface [&>svg]:shrink-0 [&>[data-ph-private]]:min-w-0 [&>[data-ph-private]]:flex-initial [&>[data-ph-private]]:truncate"
+                  menuClassName="workspace-menu flex flex-col gap-0.5 [&_[role=menuitemradio]]:px-2.5 [&_[role=menuitemradio]]:py-2"
+                />
+              )}
+            </div>
           </div>
-          <div role="tablist" aria-label="Workspace" className="workspace-tabs">
-            {modes.map((item, index) => (
+          {project && (
+            <div className="workspace-thread-actions flex items-center gap-1.5 px-1 py-0.5">
+              <label className="workspace-thread-search flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-border bg-panel px-2 text-muted-ink focus-within:outline-2 focus-within:outline-offset-1 focus-within:outline-control-border [&>svg]:shrink-0">
+                <svg
+                  aria-hidden="true"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                >
+                  <circle cx="8.5" cy="8.5" r="5.5" />
+                  <path d="m13 13 4 4" />
+                </svg>
+                <input
+                  type="search"
+                  className="w-full min-w-0 border-0 bg-transparent p-0 text-xs leading-5 text-ink outline-none placeholder:text-muted-ink focus-visible:outline-none"
+                  aria-label="Search threads"
+                  placeholder="Search threads"
+                  value={threadQueries[project.id] ?? ""}
+                  onChange={(event) => {
+                    const query = event.currentTarget.value;
+                    setThreadQueries((current) => ({ ...current, [project.id]: query }));
+                    setMode("code");
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Escape") return;
+                    event.preventDefault();
+                    setThreadQueries((current) => ({ ...current, [project.id]: "" }));
+                  }}
+                />
+              </label>
               <Button
-                key={item.id}
-                id={`workspace-tab-${item.id}`}
-                type="button"
-                role="tab"
-                aria-selected={mode === item.id}
-                aria-controls={`workspace-panel-${item.id}`}
-                tabIndex={mode === item.id ? 0 : -1}
-                className="workspace-tab"
-                onClick={() => setMode(item.id)}
-                onKeyDown={(event) => onTabKeyDown(event, index)}
+                className="sidebar-new-thread active:scale-[0.97] grid size-8 shrink-0 cursor-pointer place-items-center rounded-md border border-transparent bg-transparent p-0 text-muted-ink hover:bg-hover-surface hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ink"
+                aria-label="New thread"
+                title="New thread"
+                onClick={() => {
+                  setThreadQueries((current) => ({ ...current, [project.id]: "" }));
+                  setMode("code");
+                  selectThread(project.id, null);
+                  requestAnimationFrame(() =>
+                    document.querySelector<HTMLElement>("#thread-prompt")?.focus(),
+                  );
+                }}
               >
-                {item.id === "design" ? (
-                  <Icon name="frame" size={14} />
-                ) : (
-                  <svg
-                    className="code-mode-icon"
-                    aria-hidden="true"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.4"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="m6 4-4 4 4 4m4-8 4 4-4 4" />
-                  </svg>
-                )}
-                {item.label}
+                <svg
+                  aria-hidden="true"
+                  width="17"
+                  height="17"
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M9 4H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-4" />
+                  <path d="m9 11 1-4 6-6 3 3-6 6-4 1Zm6-9 3 3" />
+                </svg>
               </Button>
+            </div>
+          )}
+          <div
+            role="tablist"
+            aria-label="Workspace"
+            aria-orientation="vertical"
+            className="workspace-tabs flex w-full flex-col gap-1 px-1"
+          >
+            {modes.map((item, index) => (
+              <div
+                className="workspace-destination flex items-center rounded-md data-[active=true]:bg-subtle-fill"
+                key={item.id}
+                data-active={mode === item.id}
+              >
+                <Button
+                  id={`workspace-tab-${item.id}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === item.id}
+                  aria-controls={`workspace-panel-${item.id}`}
+                  tabIndex={mode === item.id ? 0 : -1}
+                  className="workspace-tab flex min-w-0 flex-auto cursor-pointer items-center justify-start gap-1.5 rounded-md border border-transparent bg-transparent px-2 py-[7px] text-sm leading-5 font-medium whitespace-nowrap text-muted-ink hover:bg-hover-surface hover:text-ink aria-selected:bg-subtle-fill aria-selected:text-ink aria-selected:hover:bg-subtle-fill focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ink"
+                  onClick={() => setMode(item.id)}
+                  onKeyDown={(event) => onTabKeyDown(event, index)}
+                >
+                  {item.id === "design" ? (
+                    <Icon name="frame" size={14} />
+                  ) : (
+                    <svg
+                      className="code-mode-icon shrink-0"
+                      aria-hidden="true"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.4"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="m6 4-4 4 4 4m4-8 4 4-4 4" />
+                    </svg>
+                  )}
+                  {item.label}
+                </Button>
+              </div>
             ))}
           </div>
         </header>
         {project && snapshot && (
           <>
-            <div className="sidebar-mode-content" hidden={mode !== "code"}>
+            <div
+              className="sidebar-mode-content flex min-h-0 flex-1 [&[hidden]]:hidden"
+              hidden={mode !== "code"}
+            >
               <ThreadSidebar
                 key={project.id}
                 projectId={project.id}
                 threads={snapshot.threads}
-                onNew={() => selectThread(project.id, null)}
+                search={threadQueries[project.id] ?? ""}
                 renderThread={renderThread}
               />
             </div>
@@ -1329,7 +1425,7 @@ export function App() {
           aria-label="Design folders"
           hidden={mode !== "design"}
         />
-        <div className="sidebar-footer">
+        <div className="sidebar-footer mt-auto flex shrink-0 items-center gap-2 p-2">
           <Button
             ref={settingsTrigger}
             className="settings-trigger"
@@ -1479,17 +1575,23 @@ export function App() {
                 role="tabpanel"
                 aria-labelledby="workspace-tab-code"
                 hidden={mode !== "code"}
-                className="project-workspace"
+                className="project-workspace bg-panel"
               >
-                <div className="thread-workspace">
-                  <div className={`thread-heading${thread ? " thread-heading-active" : ""}`}>
-                    <div className="content-heading">
-                      <h1>
+                <div
+                  className={`thread-workspace relative flex min-h-0 min-w-0 flex-col ${codeStatusClassName}`}
+                >
+                  <div
+                    className={`thread-heading ${codeFontClassName} flex min-h-[42px] shrink-0 items-center gap-6 px-5 py-1 ${thread ? "thread-heading-active max-[700px]:flex-wrap max-[700px]:gap-1 max-[700px]:pb-2" : ""}`}
+                  >
+                    <div
+                      className={`content-heading flex min-h-[34px] min-w-0 flex-1 items-center justify-between gap-4 ${thread ? "max-[700px]:basis-full" : ""}`}
+                    >
+                      <h1 className="m-0 truncate text-sm leading-[1.5] font-medium">
                         {thread?.title ?? (selectedThreadId ? "Opening thread…" : "New thread")}
                       </h1>
                       {thread?.doneAt && (
                         <Button
-                          className="quiet-button thread-heading-action"
+                          className="quiet-button thread-heading-action shrink-0"
                           disabled={running || Boolean(updatingDone[thread.id])}
                           onClick={() => void toggleThreadDone(summarizeThread(thread))}
                         >
@@ -1498,7 +1600,7 @@ export function App() {
                       )}
                     </div>
                     {thread && (
-                      <div className="thread-context">
+                      <div className="thread-context min-w-0 max-w-[390px] shrink-0 max-[700px]:ml-auto max-[700px]:max-w-full [&_.composer-context]:justify-end [&_.composer-context]:gap-4 [&_.thread-references]:m-0 [&_.thread-references]:whitespace-nowrap [&_.context-machine]:m-0 [&_.context-machine>span]:max-w-[100px] [&_.branch-trigger]:max-w-[150px]">
                         <ComposerContext
                           repository={repository}
                           execution={executionContext}
@@ -1564,7 +1666,7 @@ export function App() {
                     />
                   )}
                   <form
-                    className={`composer ${thread ? "composer-active" : "composer-new"}`}
+                    className={`composer relative isolate mx-auto mb-6 w-[calc(100%_-_var(--chat-gutter)_*_2)] max-w-(--chat-content-width) shrink-0 rounded-2xl border-0 bg-transparent p-0 ${codeFontClassName} ${thread ? "composer-active mt-3" : "composer-new mt-[58px]"}`}
                     onDragOver={(event) => {
                       if (event.dataTransfer.types.includes("Files") && !thread?.doneAt)
                         event.preventDefault();
@@ -1581,7 +1683,7 @@ export function App() {
                     }}
                   >
                     <div
-                      className="composer-lip"
+                      className={`composer-lip absolute right-3 bottom-[calc(100%_-_20px)] left-3 rounded-t-2xl border border-border bg-[light-dark(#f5f5f5,#222222)] px-2 py-[7px] pb-[25px] max-[700px]:right-2 max-[700px]:left-2 max-[700px]:px-1.5 ${thread ? "invisible pointer-events-none opacity-0" : ""}`}
                       aria-hidden={Boolean(thread)}
                       inert={Boolean(thread)}
                     >
@@ -1607,7 +1709,7 @@ export function App() {
                         pending={Boolean(switchingBranch)}
                       />
                     </div>
-                    <div className="composer-body">
+                    <div className="composer-body relative z-[1] rounded-2xl border border-border bg-(--desktop-composer-surface) p-3 max-[700px]:p-2.5 focus-within:border-control-border">
                       <AttachmentList
                         files={draft.attachments ?? []}
                         onRemove={
@@ -1644,6 +1746,7 @@ export function App() {
                         Message
                       </label>
                       <SkillPrompt
+                        className="block w-full resize-none overflow-y-auto rounded border-0 bg-transparent px-2.5 py-2 text-[15px] leading-6 text-ink [field-sizing:content] min-h-[calc(2lh_+_16px)] max-h-[min(200px,40dvh)] placeholder:text-muted-ink focus:outline-none"
                         key={draftKey + selectedHarness}
                         skills={availableSkills}
                         status={skillCatalog.key === detailKey ? skillCatalog.status : "loading"}
@@ -1677,8 +1780,8 @@ export function App() {
                             : running
                               ? "Queue a follow-up…"
                               : thread
-                                ? "Continue this thread… / for skills"
-                                : "What would you like to work on? / for skills"
+                                ? "Reply… / for skills"
+                                : "Start a task… / for skills"
                         }
                         disabled={Boolean(thread?.doneAt) || busy}
                         maxLength={32_000}
@@ -1710,10 +1813,10 @@ export function App() {
                           }
                         }}
                       />
-                      <div className="composer-actions">
+                      <div className="composer-actions flex flex-wrap items-center gap-2 p-2">
                         <Button
                           type="button"
-                          className="quiet-button attachment-button"
+                          className="quiet-button attachment-button size-[30px]"
                           aria-label="Attach files"
                           title="Attach files"
                           disabled={Boolean(thread?.doneAt) || busy}
@@ -1735,7 +1838,7 @@ export function App() {
                             />
                           </svg>
                         </Button>
-                        <div className="composer-settings">
+                        <div className="composer-settings contents">
                           <HarnessControls
                             catalogs={harnesses.map((connection) => ({
                               connection,
@@ -1782,13 +1885,13 @@ export function App() {
                             }}
                           />
                         </div>
-                        <div className="composer-tools">
+                        <div className="composer-tools ml-auto flex shrink-0 items-center gap-3">
                           <span ref={canvasDockHome} className="canvas-dock-home" />
-                          <div className="composer-delivery">
+                          <div className="composer-delivery ml-auto flex shrink-0 items-center gap-1.5">
                             {running && !hasMessage ? (
                               <Button
                                 type="button"
-                                className="composer-submit composer-stop"
+                                className={`${codeSubmitClassName} composer-stop bg-[#e83545] text-white`}
                                 aria-label={
                                   queue.stopping || thread?.activity === "Stopping"
                                     ? "Stopping…"
@@ -1807,7 +1910,7 @@ export function App() {
                             ) : (
                               <Button
                                 type="submit"
-                                className="composer-submit"
+                                className={`${codeSubmitClassName} bg-strong-action text-on-strong-action`}
                                 disabled={!canSend}
                                 aria-label={submitLabel}
                                 title={`${submitLabel} (Enter)`}

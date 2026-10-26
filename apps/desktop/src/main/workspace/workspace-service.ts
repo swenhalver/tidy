@@ -66,6 +66,12 @@ type Job = {
   notification?: ReturnType<typeof setTimeout>;
 };
 
+type FinishJobRequest = { job: Job } & (
+  | { kind: "complete" }
+  | { kind: "stop" }
+  | { kind: "done"; doneAt: string }
+);
+
 export class WorkspaceService {
   /** Installed by the native cloud coordinator; cloud data never grants local execution. */
   authorizeCloudProject?: (projectId: string) => Promise<void>;
@@ -245,21 +251,43 @@ export class WorkspaceService {
     return this.store.readThread(projectId, threadId);
   }
 
-  /** Mark a finished thread done/reopened without admitting delayed writes during shutdown. */
   setThreadDone(projectId: string, threadId: string, done: boolean) {
+    if (this.closing) return Promise.reject(new Error("Tidy is closing."));
+    try {
+      if (done) this.requestThreadStop(projectId, threadId, false);
+    } catch (cause) {
+      return Promise.reject(cause);
+    }
     return this.serialize(threadId, () => this.setThreadDoneNow(projectId, threadId, done));
   }
 
-  private async setThreadDoneNow(projectId: string, threadId: string, done: boolean) {
+  private async setThreadDoneNow(
+    projectId: string,
+    threadId: string,
+    done: boolean,
+  ): Promise<Thread> {
     if (this.closing) throw new Error("Tidy is closing.");
-    if (this.starting.has(threadId) || this.jobs.has(threadId))
-      throw new Error("Wait for this run to finish before marking the thread done.");
+    const job = this.jobs.get(threadId);
+    if (done && job) {
+      if (job.thread.projectId !== projectId)
+        throw new Error("This thread belongs to another project.");
+      await job.process?.done.catch(() => {});
+      if (this.closing) throw new Error("Tidy is closing.");
+      job.thread.status = "stopped";
+      await this.finish({ job, kind: "done", doneAt: new Date().toISOString() });
+      return structuredClone(job.thread);
+    }
+    if (this.starting.has(threadId) || job)
+      throw new Error("Wait for this run to finish before reopening the thread.");
     this.starting.set(threadId, projectId);
     try {
       const thread = await this.store.readThread(projectId, threadId);
       if (this.closing) throw new Error("Tidy is closing.");
-      if (thread.status === "running")
-        throw new Error("Wait for this run to finish before marking the thread done.");
+      if (thread.status === "running") {
+        if (!done) throw new Error("Wait for this run to finish before reopening the thread.");
+        thread.status = "stopped";
+        thread.activity = undefined;
+      }
       if (Boolean(thread.doneAt) === done) return thread;
       thread.doneAt = done ? new Date().toISOString() : undefined;
       thread.revision++;
@@ -471,7 +499,7 @@ export class WorkspaceService {
         if (job.stopped) {
           if (this.closing) return structuredClone(thread);
           await job.process?.done.catch(() => {});
-          await this.finish(job, false);
+          await this.finish({ job, kind: "stop" });
           if (this.closing || (this.stopVersions.get(thread.id) ?? 0) !== stopVersion)
             return structuredClone(thread);
           this.automaticQueues.add(thread.id);
@@ -514,7 +542,7 @@ export class WorkspaceService {
         job.process?.stop();
         this.emit({ type: "thread", thread });
         await job.process?.done.catch(() => {});
-        await this.finish(job, false);
+        await this.finish({ job, kind: "stop" });
         if (this.closing || (this.stopVersions.get(thread.id) ?? 0) !== stopVersion)
           return structuredClone(thread);
       }
@@ -748,7 +776,7 @@ export class WorkspaceService {
           thread.messages = thread.messages.filter((item) => item.id !== messageId);
         }
         thread.status = "stopped";
-        await this.finish(job, false);
+        await this.finish({ job, kind: "stop" });
         return structuredClone(thread);
       }
       job.process = this.launch({
@@ -889,10 +917,11 @@ export class WorkspaceService {
         job.thread.error =
           error instanceof Error ? error.message : "The harness stopped unexpectedly.";
     }
-    await this.serialize(job.thread.id, () => this.finish(job, true));
+    await this.serialize(job.thread.id, () => this.finish({ job, kind: "complete" }));
   }
 
-  private async finish(job: Job, drain: boolean) {
+  private async finish(request: FinishJobRequest) {
+    const { job } = request;
     if (this.jobs.get(job.thread.id) !== job) return;
     const delivery = job.queuedDelivery;
     if (
@@ -919,19 +948,25 @@ export class WorkspaceService {
     job.thread.pendingApprovals = undefined;
     job.thread.revision++;
     job.thread.updatedAt = new Date().toISOString();
+    const previousDoneAt = job.thread.doneAt;
+    if (request.kind === "done") job.thread.doneAt = request.doneAt;
+    let writeFailure: { cause: unknown } | undefined;
     try {
       await this.store.writeThread(job.thread);
-    } catch {
+    } catch (cause) {
+      writeFailure = { cause };
+      job.thread.doneAt = previousDoneAt;
       job.thread.error = "Thread changes could not be written to disk.";
     }
     this.jobs.delete(job.thread.id);
     this.emit({ type: "thread", thread: job.thread });
     void this.refreshDesigns(job.thread.projectId).catch(() => {});
+    if (request.kind === "done" && writeFailure) throw writeFailure.cause;
     const next = job.thread.queuedMessages?.[0];
     if (!next || job.stopped || job.thread.error || this.closing)
       this.automaticQueues.delete(job.thread.id);
     if (
-      drain &&
+      request.kind === "complete" &&
       next &&
       !this.closing &&
       !job.stopped &&
@@ -977,6 +1012,10 @@ export class WorkspaceService {
   }
 
   async stopThread(projectId: string, threadId: string) {
+    return this.requestThreadStop(projectId, threadId, true);
+  }
+
+  private requestThreadStop(projectId: string, threadId: string, notify: boolean) {
     const active = this.jobs.get(threadId)?.thread;
     const preparingProject = this.starting.get(threadId);
     if (
@@ -997,8 +1036,14 @@ export class WorkspaceService {
     job.thread.activity = "Stopping";
     job.thread.pendingApprovals = undefined;
     job.thread.revision++;
+    if (!notify) {
+      clearTimeout(job.notification);
+      clearTimeout(job.checkpoint);
+      job.notification = undefined;
+      job.checkpoint = undefined;
+    }
     job.process?.stop();
-    this.emit({ type: "thread", thread: job.thread });
+    if (notify) this.emit({ type: "thread", thread: job.thread });
   }
 
   /** Persist harness work; recovery releases only this update's shutdown reservation. */

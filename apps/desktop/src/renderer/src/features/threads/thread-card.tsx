@@ -1,6 +1,7 @@
+import { codeFontClassName } from "../../styles/code-ui";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@tidy/ui/button";
-import { HarnessIcon } from "@tidy/ui/harness-icon";
+import { ModelProviderIcon } from "../harnesses/model-provider-icon";
 import { relativeThreadTime } from "./thread-time";
 import type { ThreadSummary } from "../../../../shared/contracts/desktop";
 import type { ThreadOrderControls } from "./thread-sidebar";
@@ -10,6 +11,7 @@ import { ThreadPreview } from "./thread-preview";
 export function ThreadCard({
   thread,
   selected,
+  loaded,
   now,
   pending,
   onSelect,
@@ -21,6 +23,7 @@ export function ThreadCard({
 }: {
   thread: ThreadSummary;
   selected: boolean;
+  loaded: boolean;
   now: number;
   pending: boolean;
   onSelect(): void;
@@ -31,26 +34,55 @@ export function ThreadCard({
   orderControls?: ThreadOrderControls;
 }) {
   const working = thread.status === "running";
+  const completionKey =
+    thread.messageCount === undefined ? thread.updatedAt : `messages:${thread.messageCount}`;
+  const visitKey = `tidy:thread-seen:${thread.projectId}:${thread.id}`;
+  const [seenCompletion, setSeenCompletion] = useState<string | null>(() => {
+    try {
+      const saved = localStorage.getItem(visitKey);
+      if (saved && /^\d{4}-/.test(saved) && thread.messageCount !== undefined)
+        return `messages:${saved.slice(saved.lastIndexOf(":") + 1)}`;
+      return saved;
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    if (!selected || !loaded || thread.status !== "completed") return;
+    function markSeen() {
+      if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+      setSeenCompletion(completionKey);
+      try {
+        localStorage.setItem(visitKey, completionKey);
+      } catch {}
+    }
+    markSeen();
+    document.addEventListener("visibilitychange", markSeen);
+    window.addEventListener("focus", markSeen);
+    return () => {
+      document.removeEventListener("visibilitychange", markSeen);
+      window.removeEventListener("focus", markSeen);
+    };
+  }, [selected, loaded, thread.status, completionKey, visitKey]);
   const status = thread.doneAt
-    ? "done"
+    ? "idle"
     : thread.pendingApprovalCount
       ? "permission"
-      : thread.status;
-  const statusLabel = thread.doneAt
-    ? "Done"
-    : thread.pendingApprovalCount
-      ? "Permission"
       : working
+        ? "running"
+        : thread.status === "failed"
+          ? "failed"
+          : thread.status === "completed" && !selected && seenCompletion !== completionKey
+            ? "completed"
+            : "idle";
+  const statusLabel =
+    status === "permission"
+      ? "Approval"
+      : status === "running"
         ? "Working"
-        : thread.status === "completed"
-          ? "Ready"
-          : thread.status === "failed"
-            ? "Failed"
-            : thread.status === "stopped"
-              ? "Stopped"
-              : thread.status === "interrupted"
-                ? "Interrupted"
-                : "Ready";
+        : status === "failed"
+          ? "Failed"
+          : "Unread response";
   const [open, setOpen] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const root = useRef<HTMLDivElement>(null),
@@ -92,7 +124,8 @@ export function ThreadCard({
   return (
     <div
       ref={root}
-      className={`sidebar-item thread-item ${selected ? "selected" : ""} ${!working ? "can-change-status" : ""}`}
+      className={`thread-item can-change-status relative mb-[3px] block w-full cursor-pointer overflow-hidden rounded-md border border-transparent p-0 text-left text-[13px] leading-[1.5] text-ellipsis whitespace-nowrap text-ink hover:border-border ${selected ? "selected bg-subtle-fill hover:bg-subtle-fill" : "bg-transparent hover:bg-hover-surface"}`}
+      data-quiet={status === "idle" && !selected ? "true" : undefined}
       onPointerDown={(event) => {
         close();
         orderControls?.onPointerDown(event);
@@ -111,7 +144,7 @@ export function ThreadCard({
       }}
     >
       <Button
-        className="thread-select"
+        className="thread-select flex w-full cursor-pointer flex-col gap-0.5 rounded-[inherit] border-0 bg-transparent px-2 py-2.5 text-left text-[13px] leading-5 text-inherit"
         aria-keyshortcuts={orderControls ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
         onKeyDown={(event) => {
           if (
@@ -133,54 +166,94 @@ export function ThreadCard({
           onSelect();
         }}
       >
-        <span className="thread-harness">
-          <HarnessIcon harness={thread.harness} size={13} />
-          <span>{thread.harness === "codex" ? "Codex" : "Claude Code"}</span>
+        <span
+          className={`thread-title block w-full truncate text-sm leading-5 font-medium ${thread.doneAt ? "pr-16" : "pr-12"} ${status === "idle" && !selected ? "text-[light-dark(#424242,#d4d4d4)]" : ""}`}
+        >
+          {thread.title}
         </span>
-        <span className="thread-title">{thread.title}</span>
+        <span
+          className={`thread-harness flex min-w-0 items-center gap-1.5 text-xs leading-[18px] text-muted-ink [&>.model-provider-icon]:size-3.5 [&>svg]:size-3.5 [&>svg]:shrink-0 [&>span]:truncate ${status === "idle" ? "max-w-full" : status === "completed" ? "max-w-[calc(100%_-_28px)]" : "max-w-[calc(100%_-_76px)]"}`}
+        >
+          <ModelProviderIcon harness={thread.harness} />
+          <span
+            className="thread-provider-name shrink-0"
+            title={thread.harness === "codex" ? "Codex" : "Claude Code"}
+          >
+            {thread.harness === "codex" ? "Codex" : "Claude"}
+          </span>
+          {projectName && (
+            <>
+              <span className="thread-project-separator shrink-0" aria-hidden="true">
+                ·
+              </span>
+              <span className="thread-project min-w-5 text-secondary-ink" title={projectName}>
+                {projectName}
+              </span>
+            </>
+          )}
+        </span>
         <time
-          className="thread-time"
+          className="thread-time absolute top-2.5 right-2 text-[11px] leading-5 text-muted-ink tabular-nums"
           dateTime={thread.updatedAt}
           title={new Date(thread.updatedAt).toLocaleString()}
         >
           {relativeThreadTime(thread.updatedAt, now)}
         </time>
       </Button>
-      <span
-        className={`thread-card-status thread-state-${status}`}
-        role="status"
-        aria-label={statusLabel}
-      >
-        <span className="thread-status-symbol" aria-hidden="true">
-          {status === "completed" || status === "done" ? (
-            <svg viewBox="0 0 16 16" fill="none">
-              <circle cx="8" cy="8" r="6" />
-              <path d="m5 8 2 2 4-4" />
-            </svg>
-          ) : (
-            <span />
-          )}
-        </span>
-        {statusLabel}
-      </span>
-      {!working && (
-        <Button
-          className={`thread-done ${thread.doneAt ? "thread-reopen" : ""}`}
-          onPointerEnter={close}
-          onFocus={close}
-          aria-label={`${thread.doneAt ? "Reopen thread" : "Mark done"}: ${thread.title}`}
-          disabled={pending}
-          title={thread.doneAt ? "Move back to active threads" : "Mark thread done"}
-          onClick={() => {
-            close();
-            onDone();
-          }}
+      {status !== "idle" && (
+        <span
+          className={`thread-card-status thread-state-${status} pointer-events-none absolute right-2 bottom-2.5 flex max-w-[calc(100%_-_20px)] items-center gap-[5px] text-[11px] leading-[1.5] ${status === "running" ? "text-(--desktop-status-active)" : status === "permission" ? "text-(--desktop-status-warning)" : status === "failed" ? "text-(--desktop-status-danger)" : "text-[light-dark(#15803d,#4caf50)]"}`}
+          role="status"
+          aria-label={statusLabel}
+          title={statusLabel}
         >
-          {thread.doneAt ? "Reopen" : "Done"}
-        </Button>
+          <span className="thread-status-symbol" aria-hidden="true">
+            {status === "completed" ? (
+              <svg viewBox="0 0 16 16">
+                <circle cx="8" cy="8" r="7" fill="currentColor" stroke="none" />
+                <path className="thread-ready-check" d="m4.8 8 2.1 2.1 4.2-4.3" fill="none" />
+              </svg>
+            ) : status === "running" ? (
+              <span />
+            ) : (
+              <svg viewBox="0 0 16 16" fill="none">
+                <circle cx="8" cy="8" r="6" />
+                <path d="M8 4.5v4" />
+                <circle cx="8" cy="11" r="0.7" fill="currentColor" stroke="none" />
+              </svg>
+            )}
+          </span>
+          {status !== "completed" && statusLabel}
+        </span>
       )}
+      <Button
+        className={`thread-done absolute top-[7px] right-2 flex h-[22px] min-h-[26px] min-w-11 cursor-pointer items-center justify-center gap-[3px] rounded border-0 bg-transparent px-1.5 py-[3px] text-[11px] leading-[1.5] text-muted-ink hover:bg-hover-surface hover:text-ink ${thread.doneAt ? "thread-reopen w-14" : "w-10"}`}
+        onPointerEnter={close}
+        onFocus={close}
+        aria-label={`${thread.doneAt ? "Reopen thread" : "Mark done"}: ${thread.title}`}
+        disabled={pending}
+        title={
+          thread.doneAt
+            ? "Move back to active threads"
+            : working
+              ? "Stop thread and mark done"
+              : "Mark thread done"
+        }
+        onClick={() => {
+          close();
+          onDone();
+        }}
+      >
+        {thread.doneAt ? "Reopen" : "Done"}
+      </Button>
       {open && !orderControls?.dragging && (
-        <div ref={preview} id={id} popover="manual" role="tooltip" className="thread-preview">
+        <div
+          ref={preview}
+          id={id}
+          popover="manual"
+          role="tooltip"
+          className={`thread-preview fixed inset-auto m-0 max-h-[calc(100vh_-_16px)] w-80 max-w-[calc(100vw_-_16px)] overflow-auto rounded-xl border border-border bg-panel p-4 text-xs whitespace-normal text-ink shadow-[0_8px_24px_rgb(0_0_0_/_16%)] ${codeFontClassName}`}
+        >
           <ThreadPreview
             thread={thread}
             projectName={projectName}

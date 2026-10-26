@@ -1,7 +1,7 @@
 :root {
   color-scheme: light dark;
-  --color-ink: light-dark(#424242, #d4d4d4);
-  --color-muted-ink: light-dark(#6b6b6b, #969696);
+  --color-ink: light-dark(#292929, #ededed);
+  --color-muted-ink: light-dark(#656565, #aaaaaa);
   --color-panel: light-dark(#fafafa, #171717);
   --color-border: light-dark(#dedede, #353535);
   --color-hover-surface: light-dark(#f0f0f0, #252525);
@@ -18,13 +18,13 @@
   --color-strong-action-hover: light-dark(#595959, #d4d4d4);
   --color-on-strong-action: light-dark(#ffffff, #171717);
   --desktop-surface: var(--color-surface);
-  --desktop-status-active: light-dark(#2563eb, #60a5fa);
+  --desktop-status-active: light-dark(#1d4ed8, #60a5fa);
   --desktop-status-success: light-dark(#15803d, #4ade80);
-  --desktop-status-warning: light-dark(#a16207, #fbbf24);
-  --desktop-status-danger: light-dark(#dc2626, #f87171);
+  --desktop-status-warning: light-dark(#854d0e, #fbbf24);
+  --desktop-status-danger: light-dark(#b91c1c, #f87171);
   --desktop-navigation-surface: light-dark(#f7f7f7, #0f0f0f);
   --desktop-editor-sidebar-surface: light-dark(#fafafa, #0f0f0f);
-  --desktop-composer-surface: light-dark(#ffffff, #303030);
+  --desktop-composer-surface: light-dark(#ffffff, #242424);
   --project-sidebar-width: 244px;
   --chat-content-width: 46rem;
   --chat-gutter: 48px;
