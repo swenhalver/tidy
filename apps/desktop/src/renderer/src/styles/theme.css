@@ -1,0 +1,45 @@
+:root {
+  color-scheme: light dark;
+  --color-ink: light-dark(#424242, #d4d4d4);
+  --color-muted-ink: light-dark(#6b6b6b, #969696);
+  --color-panel: light-dark(#fafafa, #171717);
+  --color-border: light-dark(#dedede, #353535);
+  --color-hover-surface: light-dark(#f0f0f0, #252525);
+  --color-subtle-fill: light-dark(#e9e9e9, #252525);
+  --color-secondary-ink: light-dark(#646464, #aaaaaa);
+  --color-accent-ink: light-dark(#595959, #ededed);
+  --color-control-border: light-dark(#888888, #707070);
+  --color-accent: light-dark(#595959, #ededed);
+  --color-pressed-surface: light-dark(#e5e5e5, #303030);
+  --color-surface: light-dark(#ffffff, #171717);
+  --color-canvas: light-dark(#f3f3f3, #262626);
+  --color-on-accent: light-dark(#ffffff, #171717);
+  --color-strong-action: light-dark(#424242, #ededed);
+  --color-strong-action-hover: light-dark(#595959, #d4d4d4);
+  --color-on-strong-action: light-dark(#ffffff, #171717);
+  --desktop-surface: var(--color-surface);
+  --desktop-status-active: light-dark(#2563eb, #60a5fa);
+  --desktop-status-success: light-dark(#15803d, #4ade80);
+  --desktop-status-warning: light-dark(#a16207, #fbbf24);
+  --desktop-status-danger: light-dark(#dc2626, #f87171);
+  --desktop-navigation-surface: light-dark(#f7f7f7, #0f0f0f);
+  --desktop-editor-sidebar-surface: light-dark(#fafafa, #0f0f0f);
+  --desktop-composer-surface: light-dark(#ffffff, #303030);
+  --project-sidebar-width: 244px;
+  --chat-content-width: 46rem;
+  --chat-gutter: 48px;
+  font-family: var(--font-instrument-sans);
+  color: var(--color-ink);
+  background: var(--color-panel);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}

@@ -8,7 +8,10 @@ const licenceBanner = (chunk: { modules: Record<string, unknown> }) =>
   bundleLicenseBannerForInputs(Object.keys(chunk.modules));
 
 export const rendererConfig = {
-  worker: { format: "es", rolldownOptions: { output: { banner: licenceBanner } } },
+  worker: {
+    format: "es",
+    rolldownOptions: { output: { banner: licenceBanner, comments: { legal: true } } },
+  },
   plugins: [
     react(),
     tailwindcss(),
@@ -28,8 +31,10 @@ export const rendererConfig = {
     strictPort: true,
   },
   build: {
+    minify: true,
     rolldownOptions: {
       output: {
+        comments: { legal: true },
         banner: (chunk) => bundleLicenseBannerForInputs(Object.keys(chunk.modules)),
       },
     },
@@ -44,7 +49,7 @@ export default defineConfig({
         input: {
           index: fileURLToPath(new URL("./src/main/index.ts", import.meta.url)),
           "cloud-compute-worker": fileURLToPath(
-            new URL("./src/main/cloud-compute-worker.ts", import.meta.url),
+            new URL("./src/main/cloud/cloud-compute-worker.ts", import.meta.url),
           ),
         },
         output: { banner: licenceBanner },

@@ -2,12 +2,12 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { ToastViewport } from "@tidy/ui/toast";
 import "@tidy/ui/toast.css";
-import { App } from "./app";
-import { HarnessUpdateNotices } from "./harness-updates";
+import { App } from "./app/app";
+import { HarnessUpdateNotices } from "./features/harnesses/harness-updates";
 import "@tidy/ui/fonts.css";
 import "./styles.css";
 
-if (import.meta.env.DEV && !window.tidy) await import("./browser-api");
+if (import.meta.env.DEV && !window.tidy) await import("./platform/browser-api");
 
 // Apply the native controls' inset before the first render to avoid a layout shift.
 if (window.tidy?.customTitlebar) document.documentElement.dataset.titlebar = "hidden";

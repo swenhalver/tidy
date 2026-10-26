@@ -1,0 +1,96 @@
+.app-update-control {
+  position: relative;
+  display: inline-flex;
+}
+.app-update-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-muted-ink);
+  cursor: pointer;
+  transition: transform 120ms ease-out;
+}
+.app-update-button:hover {
+  background: var(--color-hover-surface);
+  border-color: var(--color-border);
+}
+.app-update-button:active {
+  transform: scale(0.97);
+}
+.app-update-button:focus-visible {
+  outline: 2px solid var(--color-muted-ink);
+  outline-offset: 2px;
+}
+.app-update-button[aria-disabled="true"] {
+  cursor: progress;
+  color: var(--desktop-status-active);
+}
+.app-update-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--desktop-navigation-surface);
+}
+.app-update-ready {
+  color: var(--desktop-status-success);
+}
+.app-update-warning {
+  color: var(--desktop-status-warning);
+}
+.app-update-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  width: max-content;
+  max-width: min(220px, calc(100vw - 24px));
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-panel);
+  color: var(--color-ink);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 12%);
+  font-size: 12px;
+  line-height: 1.4;
+  visibility: hidden;
+}
+.app-update-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  height: 8px;
+}
+.app-update-control:is(:hover, :focus-within):not([data-tooltip-dismissed="true"])
+  .app-update-tooltip {
+  visibility: visible;
+}
+.app-update-spinning {
+  animation: app-update-spin 900ms linear infinite;
+}
+@keyframes app-update-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-update-spinning {
+    animation: none;
+  }
+  .app-update-button {
+    transition: none;
+  }
+  .app-update-button:active {
+    transform: none;
+  }
+}

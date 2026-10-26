@@ -12,27 +12,27 @@ import {
 } from "electron";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { ProjectStore } from "./project-store";
-import { projectAssetResponse } from "./project-assets";
-import { WorkspaceService } from "./workspace-service";
+import { ProjectStore } from "./workspace/project-store";
+import { projectAssetResponse } from "./workspace/project-assets";
+import { WorkspaceService } from "./workspace/workspace-service";
 import {
   registerHarnessUpdateIPC,
   registerCloudIPC,
   registerUpdateIPC,
   registerWorkspaceIPC,
-} from "./ipc";
-import { CloudAuth } from "./cloud-auth";
-import { CloudService } from "./cloud-service";
-import { PrivateState } from "./private-state";
-import { AppUpdates } from "./app-updates";
-import { HarnessUpdates } from "./harness-updates";
-import { invalidateHarnessDetails } from "./harness-details";
+} from "./ipc/ipc";
+import { CloudAuth } from "./cloud/cloud-auth";
+import { CloudService } from "./cloud/cloud-service";
+import { PrivateState } from "./platform/private-state";
+import { AppUpdates } from "./app/app-updates";
+import { HarnessUpdates } from "./harnesses/harness-updates";
+import { invalidateHarnessDetails } from "./harnesses/harness-details";
 import {
   APP_SCHEME,
   rendererURL,
   rendererAssetPath,
   trustedRendererURL,
-} from "./renderer-security";
+} from "./app/renderer-security";
 
 protocol.registerSchemesAsPrivileged([
   { scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } },
@@ -54,7 +54,6 @@ const appIcon = app.isPackaged
       process.platform === "darwin" ? "icon-macos.png" : "icon.png",
     );
 
-/** Open the workspace with its platform icon and restricted renderer permissions. */
 async function createWindow() {
   const window = new BrowserWindow({
     title: "Tidy",

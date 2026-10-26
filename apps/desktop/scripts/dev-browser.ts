@@ -5,9 +5,9 @@ import { resolve, join } from "node:path";
 import { parseArgs } from "node:util";
 import { createServer } from "vite";
 import { rendererConfig } from "../electron.vite.config";
-import { ProjectStore } from "../src/main/project-store";
-import { WorkspaceService } from "../src/main/workspace-service";
-import { browserDevelopment } from "../src/main/browser-development";
+import { ProjectStore } from "../src/main/workspace/project-store";
+import { WorkspaceService } from "../src/main/workspace/workspace-service";
+import { browserDevelopment } from "../src/main/development/browser-development";
 
 const { values } = parseArgs({
   options: {
