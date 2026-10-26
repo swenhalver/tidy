@@ -334,6 +334,18 @@ function downloadBlob(blob: Blob, name: string) {
 
 const PENDING_NAVIGATION_MESSAGE = "Your changes are still syncing. Wait before leaving this file.";
 
+const deepSelectionKey = "bella-canvas-deep-selection";
+/** Deep selection stays on unless the designer turned it off in the zoom menu. */
+function savedDeepSelection() {
+  if (typeof window === "undefined") return true;
+  try {
+    return window.localStorage.getItem(deepSelectionKey) !== "false";
+  } catch {
+    /* Storage can be disabled in private browsing. */
+    return true;
+  }
+}
+
 export function FileEditor({
   fileId,
   fileName,
@@ -506,7 +518,7 @@ export function FileEditor({
   const [prototypeMode, setPrototypeMode] = useState(false);
   const [interactionMode, setInteractionMode] = useState(false);
   const [prototypeArtboardId, setPrototypeArtboardId] = useState<string | null>(null);
-  const [viewPreferences, setViewPreferences] = useState<CanvasPreferences>({
+  const [viewPreferences, setViewPreferences] = useState<CanvasPreferences>(() => ({
     centerSelection: false,
     numberKeys: false,
     invertZoom: false,
@@ -515,9 +527,10 @@ export function FileEditor({
     snapPixels: true,
     snapObjects: true,
     guides: false,
-    deepSelection: false,
+    // Clicks select the frontmost layer; Escape and artboard labels reach its parents.
+    deepSelection: savedDeepSelection(),
     comments: true,
-  });
+  }));
   const [nudgeStep, setNudgeStep] = useState(() => {
     if (typeof window === "undefined") return 1;
     try {
@@ -937,6 +950,10 @@ export function FileEditor({
 
   function toggleViewPreference(key: keyof CanvasPreferences) {
     setViewPreferences((current) => ({ ...current, [key]: !current[key] }));
+    if (key !== "deepSelection") return;
+    try {
+      window.localStorage.setItem(deepSelectionKey, String(!viewPreferences.deepSelection));
+    } catch {}
   }
 
   function selectedBounds() {
