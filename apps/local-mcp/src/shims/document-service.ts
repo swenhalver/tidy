@@ -17,6 +17,7 @@ import type { DesignTokens } from "@/lib/design/design-tokens";
 import { mergeDesignTokens } from "@/lib/design/token-catalog";
 import { changedLayerBatch, trackDocumentChanges } from "@/lib/design/edit-document";
 import { layoutReport } from "@/lib/design/layout-diagnostics";
+import { sanitizeSvgAsset } from "@/lib/design/svg-asset";
 import { mergeImport, requireImportSource } from "@/lib/design/merge-import";
 import type { ExportAsset } from "@/lib/design/code-export";
 import { summarizeImportChunks } from "@/lib/mcp/activity-summary";
@@ -423,7 +424,7 @@ export async function abortImport(_userId: string, importId: string) {
 
 const allowedMime = new Set(["image/png", "image/jpeg", "image/webp", "image/svg+xml"]);
 
-/** The web service's validation, unchanged: type, size, SVG safety and magic bytes. */
+/** The web service's validation, unchanged: type, size, SVG normalization and magic bytes. */
 export async function putAsset(
   _userId: string,
   organizationId: string,
@@ -437,19 +438,10 @@ export async function putAsset(
     !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)
   )
     throw new PublicActionError("Unsupported or oversized asset.");
-  const body = Buffer.from(base64, "base64");
+  let body = Buffer.from(base64, "base64");
   if (body.length < 1 || body.length > 2_000_000)
     throw new PublicActionError("Asset must be 1 byte to 2 MB.");
-  if (mimeType === "image/svg+xml") {
-    const svg = body.toString("utf8");
-    if (
-      !/<svg\b/i.test(svg) ||
-      /<!DOCTYPE|<!ENTITY|<\s*(script|foreignObject|iframe|object|embed)|\bon\w+\s*=|\b(?:href|src)\s*=\s*["'](?!#)|url\s*\(/i.test(
-        svg,
-      )
-    )
-      throw new PublicActionError("SVG contains unsafe content.");
-  }
+  if (mimeType === "image/svg+xml") body = Buffer.from(sanitizeSvgAsset(body.toString("utf8")));
   const signature = body.subarray(0, 16);
   if (mimeType === "image/png" && signature.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a")
     throw new PublicActionError("Invalid PNG.");

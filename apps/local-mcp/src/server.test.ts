@@ -209,13 +209,6 @@ test("stores assets and folders in the desktop formats", async () => {
     await readFile(join(project, ".tidy/assets", `${asset.assetId}.json`), "utf8"),
   );
   expect(stored.dataUrl).toBe(`data:image/png;base64,${png}`);
-  await expect(
-    call("put_asset", {
-      organization_id: projectId,
-      mime_type: "image/svg+xml",
-      base64: Buffer.from('<svg onload="alert(1)"></svg>').toString("base64"),
-    }),
-  ).rejects.toThrow("unsafe");
 
   const { folder } = await call("create_folder", { organization_id: projectId, name: "Screens" });
   const { file } = await call("create_file", { organization_id: projectId, name: "Filed" });
@@ -227,6 +220,42 @@ test("stores assets and folders in the desktop formats", async () => {
     deleted: { unfiledFileCount: 1 },
   });
   expect(await readdir(join(project, ".tidy/folders"))).toEqual([]);
+});
+
+test("normalizes SVG assets like the web service and refuses active content", async () => {
+  const [{ id: projectId }] = (await call("list_organizations")).organizations;
+  const svg = (source: string) =>
+    call("put_asset", {
+      organization_id: projectId,
+      mime_type: "image/svg+xml",
+      base64: Buffer.from(source).toString("base64"),
+    });
+  const namespace = "http://www.w3.org/2000/svg";
+  // None of these match the old regex check, which only saw unprefixed tags and literal text.
+  for (const source of [
+    `<svg xmlns="${namespace}"><s:script xmlns:s="${namespace}">void 0</s:script></svg>`,
+    `<svg xmlns="${namespace}"><f:foreignObject xmlns:f="${namespace}"/></svg>`,
+    '<svg><use href="&#104;ttps://example.test/image"/></svg>',
+    "<svg><style>rect{fill:u\\72l(https://example.test/image)}</style></svg>",
+    '<svg><rect style="fill:url(https://example.test/image)"/></svg>',
+    '<svg><rect onload="alert(1)"/></svg>',
+    '<!DOCTYPE svg [<!ENTITY value "content">]><svg/>',
+    "not an svg",
+  ])
+    await expect(svg(source)).rejects.toThrow("unsupported content");
+
+  // Gradient and local references are static content the old check wrongly refused.
+  const asset = await svg(`<s:svg xmlns:s="${namespace}" viewBox="0 0 20 20">
+    <s:defs><s:linearGradient id="paint"><s:stop offset="0" stop-color="#fff"/></s:linearGradient></s:defs>
+    <s:rect width="20" height="20" fill="url(#paint)"/>
+  </s:svg>`);
+  const stored = JSON.parse(
+    await readFile(join(project, ".tidy/assets", `${asset.assetId}.json`), "utf8"),
+  );
+  const markup = Buffer.from(stored.dataUrl.split(",")[1], "base64").toString("utf8");
+  expect(markup).toContain('fill="url(#paint)"');
+  expect(markup).toContain(`<svg xmlns="${namespace}"`);
+  expect(markup).not.toContain("s:");
 });
 
 test("opens ordinary folders by absolute path and refuses sensitive ones", async () => {
