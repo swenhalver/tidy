@@ -33,6 +33,12 @@ export const test = base.extend({
         await page.getByLabel("Export scale", { exact: true }).press("Enter");
       },
     );
+    // These tests walk the hierarchy one click at a time, which deep selection (the default) skips.
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("bella-canvas-deep-selection", "false");
+      } catch {}
+    });
     await page.route("**/api/auth/get-session", (route) => route.fulfill({ json: null }));
     await page.route("**/__analytics/**", (route) => route.fulfill({ json: {} }));
     await page.route("https://fonts.googleapis.com/**", (route) =>
